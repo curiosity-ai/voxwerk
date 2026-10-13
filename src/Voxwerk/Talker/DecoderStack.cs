@@ -133,9 +133,27 @@ public sealed unsafe class DecoderStack : IDisposable
     /// residual stream (updated in place); the final-normed hidden states are written to <paramref name="y"/>.
     /// </summary>
     public void Forward(float* x, int tokens, KvCache cache, float* y, Parallelism par)
+        => ForwardSegments(x, [cache], [tokens], y, par);
+
+    /// <summary>
+    /// Batched forward over several independent sequences: rows of <paramref name="x"/> are grouped into consecutive
+    /// segments (<paramref name="rows"/>[i] new positions of the sequence cached in <paramref name="caches"/>[i]).
+    /// The projections and MLP run as single GEMMs over all rows, so the weights are streamed once per step for the
+    /// whole batch; RoPE positions, KV caches and attention stay per sequence.
+    /// </summary>
+    public void ForwardSegments(float* x, KvCache[] caches, int[] rows, float* y, Parallelism par)
     {
-        int pos0 = cache.Length;
-        if (pos0 + tokens > cache.Capacity) throw new InvalidOperationException("KV cache capacity exceeded.");
+        int segs = caches.Length;
+        int tokens = 0;
+        var pos0 = new int[segs];
+        var rowStart = new int[segs];
+        for (int i = 0; i < segs; i++)
+        {
+            pos0[i] = caches[i].Length;
+            rowStart[i] = tokens;
+            if (pos0[i] + rows[i] > caches[i].Capacity) throw new InvalidOperationException("KV cache capacity exceeded.");
+            tokens += rows[i];
+        }
         int qDim = Heads * HeadDim, kvDim = KvHeads * HeadDim, qkvDim = qDim + 2 * kvDim;
         long need = (long)tokens * (Hidden + qkvDim + qDim + 2 * Intermediate);
         if (_work == null || _work.Length < need)
@@ -155,23 +173,43 @@ public sealed unsafe class DecoderStack : IDisposable
             {
                 Ops.RmsNorm(x, h, tokens, Hidden, inNorm, Eps);
                 Gemm.Multiply(h, Hidden, tokens, L.Qkv, qkv, qkvDim, par);
-                float* kc = cache.K(li), vc = cache.V(li);
-                for (int t = 0; t < tokens; t++)
+                for (int sgi = 0; sgi < segs; sgi++)
                 {
-                    float* row = qkv + (long)t * qkvDim;
-                    for (int hd = 0; hd < Heads; hd++) Ops.RmsNorm(row + hd * HeadDim, row + hd * HeadDim, 1, HeadDim, qn, Eps);
-                    for (int hd = 0; hd < KvHeads; hd++) Ops.RmsNorm(row + qDim + hd * HeadDim, row + qDim + hd * HeadDim, 1, HeadDim, kn, Eps);
-                    _rope.Apply(row, Heads, pos0 + t);
-                    _rope.Apply(row + qDim, KvHeads, pos0 + t);
-                    // Head-major cache: [kvHead][position][headDim].
-                    for (int hd = 0; hd < KvHeads; hd++)
+                    var cache = caches[sgi];
+                    float* kc = cache.K(li), vc = cache.V(li);
+                    for (int t = 0; t < rows[sgi]; t++)
                     {
-                        long dst = ((long)hd * cache.Capacity + pos0 + t) * HeadDim;
-                        Buffer.MemoryCopy(row + qDim + hd * HeadDim, kc + dst, HeadDim * 4, HeadDim * 4);
-                        Buffer.MemoryCopy(row + qDim + kvDim + hd * HeadDim, vc + dst, HeadDim * 4, HeadDim * 4);
+                        float* row = qkv + (long)(rowStart[sgi] + t) * qkvDim;
+                        int pos = pos0[sgi] + t;
+                        for (int hd = 0; hd < Heads; hd++) Ops.RmsNorm(row + hd * HeadDim, row + hd * HeadDim, 1, HeadDim, qn, Eps);
+                        for (int hd = 0; hd < KvHeads; hd++) Ops.RmsNorm(row + qDim + hd * HeadDim, row + qDim + hd * HeadDim, 1, HeadDim, kn, Eps);
+                        _rope.Apply(row, Heads, pos);
+                        _rope.Apply(row + qDim, KvHeads, pos);
+                        // Head-major cache: [kvHead][position][headDim].
+                        for (int hd = 0; hd < KvHeads; hd++)
+                        {
+                            long dst = ((long)hd * cache.Capacity + pos) * HeadDim;
+                            Buffer.MemoryCopy(row + qDim + hd * HeadDim, kc + dst, HeadDim * 4, HeadDim * 4);
+                            Buffer.MemoryCopy(row + qDim + kvDim + hd * HeadDim, vc + dst, HeadDim * 4, HeadDim * 4);
+                        }
                     }
                 }
-                Attention.CausalCached(qkv, qkvDim, tokens, pos0, kc, vc, cache.Capacity, Heads, KvHeads, HeadDim, attn, qDim, par);
+                if (segs == 1)
+                {
+                    Attention.CausalCached(qkv, qkvDim, rows[0], pos0[0], caches[0].K(li), caches[0].V(li), caches[0].Capacity,
+                        Heads, KvHeads, HeadDim, attn, qDim, par);
+                }
+                else
+                {
+                    int layer = li;
+                    float* qkvp = qkv, attnp = attn;
+                    par.For(segs, sgi =>
+                    {
+                        var c = caches[sgi];
+                        Attention.CausalCached(qkvp + (long)rowStart[sgi] * qkvDim, qkvDim, rows[sgi], pos0[sgi], c.K(layer), c.V(layer), c.Capacity,
+                            Heads, KvHeads, HeadDim, attnp + (long)rowStart[sgi] * qDim, qDim, Parallelism.Single);
+                    });
+                }
                 Gemm.Multiply(attn, qDim, tokens, L.O, x, Hidden, par, accumulate: true);
 
                 Ops.RmsNorm(x, h, tokens, Hidden, postNorm, Eps);
@@ -185,7 +223,7 @@ public sealed unsafe class DecoderStack : IDisposable
             }
             LayerObserver?.Invoke(li, x, tokens);
         }
-        cache.Length = pos0 + tokens;
+        for (int i = 0; i < segs; i++) caches[i].Length = pos0[i] + rows[i];
         fixed (float* nw = _norm) Ops.RmsNorm(x, y, tokens, Hidden, nw, Eps);
     }
 

@@ -2,12 +2,18 @@
 
   <PropertyGroup>
     <PackageId>Voxwerk</PackageId>
-    <Description>Pure C# inference for Qwen3-TTS (12Hz, 0.6B Base) text-to-speech with voice cloning.</Description>
+    <Description>Pure C# inference for Qwen3-TTS (12Hz) text-to-speech: voice cloning (Base), voice design (VoiceDesign) and built-in speakers (CustomVoice), 0.6B and 1.7B, with no native dependencies.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
     <PackageReference Include="NAudio.Core" Version="3.1.0" />
   </ItemGroup>
 

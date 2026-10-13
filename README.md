@@ -17,6 +17,14 @@ text-to-speech models, as a library plus a command-line tool. All three voice mo
 
 ## Quick start
 
+Install the command-line tool from NuGet (or run it from source with `dotnet run -c Release --project src/Voxwerk.Cli --`):
+
+```bash
+dotnet tool install -g Voxwerk.Cli
+voxwerk voices --search "warm narration"
+voxwerk design --voice-id <id> --text "Hello there!" --out hello.wav
+```
+
 ```bash
 # Synthesize in a cloned voice (the checkpoint is downloaded to ~/.cache/voxwerk on first use)
 dotnet run -c Release --project src/Voxwerk.Cli -- synth \
@@ -248,6 +256,80 @@ Multi-threading (`--threads N`, default all cores) parallelizes the GEMMs, convo
 fixed workload on 4 threads: PyTorch 62.7 s (RTF 7.9; talker 447 ms/frame, decoder 15.8 s) vs Voxwerk 35.2 s
 (RTF 4.4; talker 249 ms/frame, decoder 8.0 s).
 
+## Voice packages
+
+Ready-made English voices come in two layers:
+
+- **`Voxwerk.Voices.English`** (the language package, a few MB): the catalog of every English voice, with id, name,
+  accent, style, gender, age, description, tags and the **design prompt**. With just this package any voice can be
+  spoken through the 1.7B VoiceDesign model. Register it with `EnglishVoices.Register()`.
+- **Optional audio packages**: only the reference samples (24 kbps Ogg Opus, ~36 KB per voice) needed to **clone** a
+  voice with the Base model. Each package's `Register()` registers the catalog plus its samples.
+  `Voxwerk.Voices.English.Samples` pulls in all of them, and its `EnglishVoiceSamples.RegisterAll()` registers them all.
+
+| Audio package | Voices (country id) |
+|---|---|
+| `….American.Narration.Female` / `.Male` | `us`: General American audiobook, documentary, e-learning, meditation voices |
+| `….American.Conversational.Female` / `.Male` | `us`: podcast, assistant, customer-service, social-media voices |
+| `….American.Characters` / `.Commercial` | `us`: game/animation characters; ads, radio, news, corporate |
+| `….American.Regional` | `us`: Southern, Midwest, Northeast, New York, Boston, Chicago, African American |
+| `….British.Narration` / `.Conversational` / `.Characters` / `.Commercial` | `gb` (incl. Received Pronunciation, Yorkshire, Geordie, Cockney, Welsh) |
+| `….Irish` / `.Scottish` | `ie` / `sct` |
+| `….Canadian` / `.Australian` / `.NewZealand` | `ca` / `au` / `nz` |
+| `….Indian` | `in` (incl. Hindi- and Tamil-accented) |
+| `….African` | `ng`, `za`, `africa` |
+| `….Asian` | `ph`, `sg`, `my`, `cn`, `jp`, `kr`, `id` |
+| `….European` | `de`, `fr`, `es`, `it`, `nl`, `pl`, `ru`, ... (accented English) |
+| `….International` | `jm`, `tr`, `arab`, `intl` |
+
+(`…` = `Voxwerk.Voices.English`.) Voice ids are `<language>-<country>-<voice-name>` in kebab-case, e.g.
+`en-gb-rupert-vale`. `VoiceInfo.SamplePackage` names the audio package of each voice. A voice's sample is the voice
+introducing itself ("Hi, I'm Rupert. ..." + a short self-description + an example line), generated from its design
+prompt; `VoiceInfo.SampleText` is its exact transcript, used for ICL cloning.
+
+```bash
+voxwerk voices --region British --gender female --search "calm"              # list / search / filter (--json too)
+voxwerk voices --country us --style characters --age old                    # filter by style (narration, ...)
+voxwerk voice en-gb-rupert-vale                                             # metadata, design prompt, audio package
+voxwerk voice-play en-gb-rupert-vale                                        # play the sample
+voxwerk voice-sample en-gb-rupert-vale --out rupert.wav                    # export (.opus as-is or decoded .wav)
+voxwerk synth  --voice-id en-gb-rupert-vale --text "Good evening."           # clone the sample (Base model); without
+                                                                            # the audio package: falls back to design
+voxwerk design --voice-id en-gb-rupert-vale --text "Good evening."           # VoiceDesign from the design prompt
+```
+
+```csharp
+using Voxwerk.Voices;
+Voxwerk.Voices.English.EnglishVoices.Register();                       // catalog only
+foreach (var v in VoiceRegistry.Search("calm narration", country: "gb", gender: "female")) Console.WriteLine(v.Id);
+VoiceInfo info = VoiceRegistry.GetVoiceInfo("en-gb-rupert-vale")!;
+
+// 1) Without audio: VoiceDesign from the voice's design prompt.
+using (var design = Qwen3Tts.Load(voiceDesignModelDir))
+    design.SynthesizeVoiceDesign("Good evening.", info.DesignPrompt, "english");
+
+// 2) With the audio package: clone the reference sample with the Base model (consistent voice across texts).
+Voxwerk.Voices.English.British.Narration.EnglishBritishNarrationVoices.Register();
+using var tts = Qwen3Tts.Load(baseModelDir);
+var voice = tts.CreateVoiceClonePrompt(info.Id);   // decodes the sample, clones it (ICL), caches the prompt on disk
+var result = tts.Synthesize("Good evening.", voice, "english");
+```
+
+The core library defines the contracts (`IVoicePack` for catalogs, `IVoiceSamplePack` for audio, `VoiceInfo`,
+`VoiceRegistry`, `EmbeddedVoicePack`, `EmbeddedVoiceSamplePack`) and the pure C# Ogg Opus codec (`OggOpus`, built on
+Concentus, no native dependencies). A catalog package is an embedded `voices.json`; an audio package is a set of embedded
+`<id>.opus` resources; each also has a `Register()` call.
+
+### How the voices were made
+
+The catalog of English voice *descriptions* on json2video's ElevenLabs page (accent category, gender, a short blurb and a
+preview transcript) was used only as inspiration for the variety of accents, ages, styles and use-cases. For each entry
+a new voice was written from scratch: an invented name, a rewritten description and design instruction, and a new
+self-introduction and example line in the genre of the original preview (checked to share no 4-word phrase with the
+source text). The audio is generated by Qwen3-TTS VoiceDesign from that new description; no third-party recording was
+cloned or included, and licensed celebrity voices of the catalog were excluded. Generated samples pass an automatic
+quality gate (Whisper word error rate, pitch vs. gender, pacing); failures are regenerated with new seeds. The build is reproducible with `tools/voices/run_pipeline.py` and `tools/Voxwerk.VoiceBuilder`.
+
 ## Building
 
 ```bash
@@ -256,6 +338,18 @@ dotnet build -c Release
 
 Requires the .NET 10 SDK. AVX-512 and AVX2+FMA are used when available; other CPUs fall back to portable
 (slower) code paths.
+
+### Packages and publishing
+
+`dotnet pack Voxwerk.slnx -c Release -o packages` produces every NuGet package: `Voxwerk` (library), `Voxwerk.Cli`
+(the `voxwerk` .NET tool), `Voxwerk.Voices.English` (voice catalog), the optional `Voxwerk.Voices.English.*` audio
+packages and the `Voxwerk.Voices.English.Samples` meta package. Project references become package dependencies at the
+same version, so one version is stamped across all of them.
+
+`.devops/azure-pipelines.yml` is the Azure DevOps pipeline. It restores, builds, tests and packs everything with a CalVer
+version `yy.M.<buildId>`, publishes the `.nupkg` files as a build artifact and, on `main`, pushes them to NuGet through
+the service connection named by the `nugetServiceConnection` variable (an external NuGet feed connection holding the
+API key).
 
 ## Model license
 

@@ -86,7 +86,8 @@ public static unsafe class Gemm
             for (int nbBlock = nb0; nbBlock < nb1; nbBlock += panelsPerBlock)
             {
                 int nbEnd = Math.Min(nb1, nbBlock + panelsPerBlock);
-                if (b.IsBf16)
+                bool directBf16 = b.IsBf16 && UseAvx512;   // the AVX-512 kernel widens bf16 panels in registers
+                if (b.IsBf16 && !directBf16)
                 {
                     for (int nb = nbBlock; nb < nbEnd; nb++)
                         Bf16.ToFloat(b.B16 + ((long)nb * K + k0) * NR, bBlock + (long)(nb - nbBlock) * kc * NR, kc * NR);
@@ -111,13 +112,15 @@ public static unsafe class Gemm
                     float* ap = aPack + (long)t * kc * MR;
                     for (int nb = nbBlock; nb < nbEnd; nb++)
                     {
-                        float* panel = b.IsBf16 || b.IsInt8 ? bBlock + (long)(nb - nbBlock) * kc * NR : b.F32 + ((long)nb * K + k0) * NR;
+                        float* panel = (b.IsBf16 && !directBf16) || b.IsInt8 ? bBlock + (long)(nb - nbBlock) * kc * NR : directBf16 ? null : b.F32 + ((long)nb * K + k0) * NR;
+                        ushort* panel16 = directBf16 ? b.B16 + ((long)nb * K + k0) * NR : null;
                         float* bp = biasTile + (nb - nbBlock) * NR;
                         int cols = Math.Min(NR, N - nb * NR);
                         float* cp = c + (long)r0 * ldc + nb * NR;
                         if (tr == MR && cols == NR)
                         {
-                            Kernel(ap, panel, kc, cp, ldc, mode, bp);
+                            if (panel16 != null) Kernel512Bf16(ap, panel16, kc, cp, ldc, mode, bp);
+                            else Kernel(ap, panel, kc, cp, ldc, mode, bp);
                         }
                         else
                         {
@@ -127,7 +130,8 @@ public static unsafe class Gemm
                                 for (int i = 0; i < tr; i++)
                                     for (int j = 0; j < cols; j++) cTile[i * NR + j] = cp[i * ldc + j];
                             }
-                            Kernel(ap, panel, kc, cTile, NR, mode, bp);
+                            if (panel16 != null) Kernel512Bf16(ap, panel16, kc, cTile, NR, mode, bp);
+                            else Kernel(ap, panel, kc, cTile, NR, mode, bp);
                             for (int i = 0; i < tr; i++)
                                 for (int j = 0; j < cols; j++) cp[i * ldc + j] = cTile[i * NR + j];
                         }
@@ -333,6 +337,103 @@ public static unsafe class Gemm
         Vector256.Store(c1b, c + 1 * ldc + 8);
         Vector256.Store(c1c, c + 1 * ldc + 16);
         Vector256.Store(c1d, c + 1 * ldc + 24);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static void Kernel512Bf16(float* a, ushort* b, int kc, float* c, long ldc, int mode, float* bias)
+    {
+        Vector512<float> c0a, c0b, c1a, c1b, c2a, c2b, c3a, c3b, c4a, c4b, c5a, c5b, c6a, c6b, c7a, c7b, c8a, c8b, c9a, c9b, c10a, c10b, c11a, c11b;
+        if (mode == InitZero)
+        {
+            c0a = Vector512<float>.Zero; c0b = Vector512<float>.Zero;
+            c1a = Vector512<float>.Zero; c1b = Vector512<float>.Zero;
+            c2a = Vector512<float>.Zero; c2b = Vector512<float>.Zero;
+            c3a = Vector512<float>.Zero; c3b = Vector512<float>.Zero;
+            c4a = Vector512<float>.Zero; c4b = Vector512<float>.Zero;
+            c5a = Vector512<float>.Zero; c5b = Vector512<float>.Zero;
+            c6a = Vector512<float>.Zero; c6b = Vector512<float>.Zero;
+            c7a = Vector512<float>.Zero; c7b = Vector512<float>.Zero;
+            c8a = Vector512<float>.Zero; c8b = Vector512<float>.Zero;
+            c9a = Vector512<float>.Zero; c9b = Vector512<float>.Zero;
+            c10a = Vector512<float>.Zero; c10b = Vector512<float>.Zero;
+            c11a = Vector512<float>.Zero; c11b = Vector512<float>.Zero;
+        }
+        else if (mode == InitBias)
+        {
+            var ba = Vector512.Load(bias); var bb = Vector512.Load(bias + 16);
+            c0a = ba; c0b = bb;
+            c1a = ba; c1b = bb;
+            c2a = ba; c2b = bb;
+            c3a = ba; c3b = bb;
+            c4a = ba; c4b = bb;
+            c5a = ba; c5b = bb;
+            c6a = ba; c6b = bb;
+            c7a = ba; c7b = bb;
+            c8a = ba; c8b = bb;
+            c9a = ba; c9b = bb;
+            c10a = ba; c10b = bb;
+            c11a = ba; c11b = bb;
+        }
+        else
+        {
+            c0a = Vector512.Load(c + 0 * ldc); c0b = Vector512.Load(c + 0 * ldc + 16);
+            c1a = Vector512.Load(c + 1 * ldc); c1b = Vector512.Load(c + 1 * ldc + 16);
+            c2a = Vector512.Load(c + 2 * ldc); c2b = Vector512.Load(c + 2 * ldc + 16);
+            c3a = Vector512.Load(c + 3 * ldc); c3b = Vector512.Load(c + 3 * ldc + 16);
+            c4a = Vector512.Load(c + 4 * ldc); c4b = Vector512.Load(c + 4 * ldc + 16);
+            c5a = Vector512.Load(c + 5 * ldc); c5b = Vector512.Load(c + 5 * ldc + 16);
+            c6a = Vector512.Load(c + 6 * ldc); c6b = Vector512.Load(c + 6 * ldc + 16);
+            c7a = Vector512.Load(c + 7 * ldc); c7b = Vector512.Load(c + 7 * ldc + 16);
+            c8a = Vector512.Load(c + 8 * ldc); c8b = Vector512.Load(c + 8 * ldc + 16);
+            c9a = Vector512.Load(c + 9 * ldc); c9b = Vector512.Load(c + 9 * ldc + 16);
+            c10a = Vector512.Load(c + 10 * ldc); c10b = Vector512.Load(c + 10 * ldc + 16);
+            c11a = Vector512.Load(c + 11 * ldc); c11b = Vector512.Load(c + 11 * ldc + 16);
+            if (mode == InitLoadBias)
+            {
+                var ba = Vector512.Load(bias); var bb = Vector512.Load(bias + 16);
+                c0a += ba; c0b += bb;
+                c1a += ba; c1b += bb;
+                c2a += ba; c2b += bb;
+                c3a += ba; c3b += bb;
+                c4a += ba; c4b += bb;
+                c5a += ba; c5b += bb;
+                c6a += ba; c6b += bb;
+                c7a += ba; c7b += bb;
+                c8a += ba; c8b += bb;
+                c9a += ba; c9b += bb;
+                c10a += ba; c10b += bb;
+                c11a += ba; c11b += bb;
+            }
+        }
+        for (int p = 0; p < kc; p++)
+        {
+            var b0 = Bf16.Load512(b); var b1 = Bf16.Load512(b + 16);
+            { var x = Vector512.Create(a[0]); c0a = Avx512F.FusedMultiplyAdd(x, b0, c0a); c0b = Avx512F.FusedMultiplyAdd(x, b1, c0b); }
+            { var x = Vector512.Create(a[1]); c1a = Avx512F.FusedMultiplyAdd(x, b0, c1a); c1b = Avx512F.FusedMultiplyAdd(x, b1, c1b); }
+            { var x = Vector512.Create(a[2]); c2a = Avx512F.FusedMultiplyAdd(x, b0, c2a); c2b = Avx512F.FusedMultiplyAdd(x, b1, c2b); }
+            { var x = Vector512.Create(a[3]); c3a = Avx512F.FusedMultiplyAdd(x, b0, c3a); c3b = Avx512F.FusedMultiplyAdd(x, b1, c3b); }
+            { var x = Vector512.Create(a[4]); c4a = Avx512F.FusedMultiplyAdd(x, b0, c4a); c4b = Avx512F.FusedMultiplyAdd(x, b1, c4b); }
+            { var x = Vector512.Create(a[5]); c5a = Avx512F.FusedMultiplyAdd(x, b0, c5a); c5b = Avx512F.FusedMultiplyAdd(x, b1, c5b); }
+            { var x = Vector512.Create(a[6]); c6a = Avx512F.FusedMultiplyAdd(x, b0, c6a); c6b = Avx512F.FusedMultiplyAdd(x, b1, c6b); }
+            { var x = Vector512.Create(a[7]); c7a = Avx512F.FusedMultiplyAdd(x, b0, c7a); c7b = Avx512F.FusedMultiplyAdd(x, b1, c7b); }
+            { var x = Vector512.Create(a[8]); c8a = Avx512F.FusedMultiplyAdd(x, b0, c8a); c8b = Avx512F.FusedMultiplyAdd(x, b1, c8b); }
+            { var x = Vector512.Create(a[9]); c9a = Avx512F.FusedMultiplyAdd(x, b0, c9a); c9b = Avx512F.FusedMultiplyAdd(x, b1, c9b); }
+            { var x = Vector512.Create(a[10]); c10a = Avx512F.FusedMultiplyAdd(x, b0, c10a); c10b = Avx512F.FusedMultiplyAdd(x, b1, c10b); }
+            { var x = Vector512.Create(a[11]); c11a = Avx512F.FusedMultiplyAdd(x, b0, c11a); c11b = Avx512F.FusedMultiplyAdd(x, b1, c11b); }
+            a += 12; b += 32;
+        }
+        Vector512.Store(c0a, c + 0 * ldc); Vector512.Store(c0b, c + 0 * ldc + 16);
+        Vector512.Store(c1a, c + 1 * ldc); Vector512.Store(c1b, c + 1 * ldc + 16);
+        Vector512.Store(c2a, c + 2 * ldc); Vector512.Store(c2b, c + 2 * ldc + 16);
+        Vector512.Store(c3a, c + 3 * ldc); Vector512.Store(c3b, c + 3 * ldc + 16);
+        Vector512.Store(c4a, c + 4 * ldc); Vector512.Store(c4b, c + 4 * ldc + 16);
+        Vector512.Store(c5a, c + 5 * ldc); Vector512.Store(c5b, c + 5 * ldc + 16);
+        Vector512.Store(c6a, c + 6 * ldc); Vector512.Store(c6b, c + 6 * ldc + 16);
+        Vector512.Store(c7a, c + 7 * ldc); Vector512.Store(c7b, c + 7 * ldc + 16);
+        Vector512.Store(c8a, c + 8 * ldc); Vector512.Store(c8b, c + 8 * ldc + 16);
+        Vector512.Store(c9a, c + 9 * ldc); Vector512.Store(c9b, c + 9 * ldc + 16);
+        Vector512.Store(c10a, c + 10 * ldc); Vector512.Store(c10b, c + 10 * ldc + 16);
+        Vector512.Store(c11a, c + 11 * ldc); Vector512.Store(c11b, c + 11 * ldc + 16);
     }
 
     private static void KernelScalar(float* a, float* b, int kc, float* c, long ldc, int mode, float* bias)

@@ -120,4 +120,29 @@ public unsafe class TalkerParityTests(ITestOutputHelper output, TalkerFixture fx
         Assert.Equal(expectedCodes.Shape[0], frames.Count);
         Assert.Equal(expectedCodes.Ints, frames.SelectMany(f => f).ToArray());
     }
+
+    [Fact]
+    public void BatchedGenerationMatchesReference()
+    {
+        if (!Fixtures.Available(output)) return;
+        var par = new Parallelism(0);
+        var gen = new TalkerGenerator(fx.Model!, fx.Tokenizer!);
+        var icl = gen.BuildPrompt(fx.Text, "English", Voice(icl: true), nonStreaming: false, par);
+        var xvec = gen.BuildPrompt(fx.Text, "English", Voice(icl: false), nonStreaming: false, par);
+        var expIcl = Fixtures.Ref("gen_codes");
+        var expX = Fixtures.Ref("xvec_gen_codes");
+        var opts = GenerationOptions.Greedy with { MaxNewTokens = expIcl.Shape[0] + 1 };
+        var jobs = new[] { new TalkerGenerator.BatchJob(icl, opts), new TalkerGenerator.BatchJob(xvec, opts), new TalkerGenerator.BatchJob(icl, opts) };
+        var results = new List<int[]>[3];
+        gen.GenerateBatch(jobs, maxBatch: 2, par, (job, frames) => results[job] = frames);
+        var expected = new[] { expIcl.Ints, expX.Ints, expIcl.Ints };
+        for (int j = 0; j < 3; j++)
+        {
+            var got = results[j].SelectMany(f => f).ToArray();
+            int mismatches = got.Zip(expected[j], (a, b) => a == b ? 0 : 1).Sum();
+            output.WriteLine($"job {j}: {results[j].Count} frames, {mismatches} code mismatches");
+            Assert.Equal(expected[j].Length, got.Length);
+            Assert.Equal(0, mismatches);
+        }
+    }
 }

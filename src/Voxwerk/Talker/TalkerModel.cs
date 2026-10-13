@@ -129,12 +129,12 @@ public sealed unsafe class TalkerModel : IDisposable
         for (int i = 0; i < n; i++) dst[i] += tmp[i];
     }
 
-    /// <summary>Talker logits for one normed hidden row.</summary>
-    public void CodecHead(float* hidden, float* logits, Parallelism par) => Gemm.Multiply(hidden, Hidden, 1, _codecHead, logits, Config.VocabSize, par);
+    /// <summary>Talker logits for <paramref name="rows"/> normed hidden rows.</summary>
+    public void CodecHead(float* hidden, float* logits, Parallelism par, int rows = 1) => Gemm.Multiply(hidden, Hidden, rows, _codecHead, logits, Config.VocabSize, par);
 
-    /// <summary>Code predictor head for codebook <paramref name="group"/> (1..15).</summary>
-    public void CodePredictorHead(int group, float* hidden, float* logits, Parallelism par)
-        => Gemm.Multiply(hidden, CpHidden, 1, _cpHead[group - 1], logits, Config.CpVocabSize, par);
+    /// <summary>Code predictor head for codebook <paramref name="group"/> (1..15) over <paramref name="rows"/> rows.</summary>
+    public void CodePredictorHead(int group, float* hidden, float* logits, Parallelism par, int rows = 1)
+        => Gemm.Multiply(hidden, CpHidden, rows, _cpHead[group - 1], logits, Config.CpVocabSize, par);
 
     public void Dispose()
     {

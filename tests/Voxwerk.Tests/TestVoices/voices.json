@@ -1,0 +1,23 @@
+[
+  {
+    "id": "en-us-amber-hollis",
+    "name": "Amber Hollis",
+    "language": "en",
+    "country": "us",
+    "region": "American",
+    "style": "Conversational",
+    "category": "US Southern",
+    "gender": "female",
+    "age": "middle-aged",
+    "description": "A warm, unhurried Southern woman with a gentle drawl, suited to friendly explainers.",
+    "tags": [
+      "warm",
+      "southern",
+      "conversational"
+    ],
+    "sample_text": "Hi, I'm Amber. I bring a warm Southern welcome to every story. Pull up a chair, because this recipe is worth the wait.",
+    "sample_seconds": 9.12,
+    "design_prompt": "A middle-aged Southern American woman with a warm, gentle drawl, speaking in a relaxed and friendly way.",
+    "sample_package": "Voxwerk.Tests.TestVoices"
+  }
+]

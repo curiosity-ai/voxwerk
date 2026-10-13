@@ -1,0 +1,88 @@
+# Builds, tests and publishes every Voxwerk NuGet package with one shared CalVer version (yy.M.<buildId>):
+#   Voxwerk                          core library
+#   Voxwerk.Cli                      the `voxwerk` dotnet tool (dotnet tool install -g Voxwerk.Cli)
+#   Voxwerk.Voices.English           English voice catalog (metadata + design prompts)
+#   Voxwerk.Voices.English.*         optional audio packages (reference samples for cloning)
+#   Voxwerk.Voices.English.Samples   meta package referencing every English audio package
+# Project references between them become package dependencies at that same version when packed.
+
+variables:
+  solution: './Voxwerk.slnx'
+  buildConfiguration: 'Release'
+  targetVersion: yy.M.$(build.buildId)
+  packageOutput: '$(Build.ArtifactStagingDirectory)/packages'
+  # Azure DevOps service connection (NuGet, external feed) used to push the packages.
+  nugetServiceConnection: 'nuget-curiosity-org'
+
+pool:
+  vmImage: 'windows-latest'
+
+trigger:
+- main
+
+steps:
+- checkout: self
+  fetchDepth: 10
+
+- task: PowerShell@2
+  displayName: 'Create CalVer version'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $dottedDate = (Get-Date).ToString("yy.M")
+      $modBuildID = [int]$env:BUILD_BUILDID % 65536  # must fit a version component
+      $newTargetVersion = "$dottedDate.$modBuildID"
+      Write-Host "##vso[task.setvariable variable=targetVersion;]$newTargetVersion"
+      Write-Host "Updated targetVersion to '$newTargetVersion'"
+
+- task: UseDotNet@2
+  displayName: 'Use .NET 10.0 SDK'
+  inputs:
+    packageType: sdk
+    version: 10.x
+    includePreviewVersions: false
+    installationPath: $(Agent.ToolsDirectory)/dotnet
+
+- task: DotNetCoreCLI@2
+  displayName: 'restore'
+  inputs:
+    command: 'restore'
+    projects: '$(solution)'
+
+- task: DotNetCoreCLI@2
+  displayName: 'build'
+  inputs:
+    command: 'build'
+    projects: '$(solution)'
+    arguments: '-c $(buildConfiguration) --no-restore /p:Version=$(targetVersion)'
+
+# Model-dependent parity tests skip themselves when VOXWERK_MODEL_DIR / VOXWERK_REFERENCE_DIR are not set.
+- task: DotNetCoreCLI@2
+  displayName: 'test'
+  inputs:
+    command: 'test'
+    projects: 'tests/Voxwerk.Tests/Voxwerk.Tests.csproj'
+    arguments: '-c $(buildConfiguration) --no-build'
+
+- task: DotNetCoreCLI@2
+  displayName: 'pack all packages'
+  inputs:
+    command: 'custom'
+    custom: 'pack'
+    projects: '$(solution)'
+    arguments: '-c $(buildConfiguration) --no-build /p:Version=$(targetVersion) -o $(packageOutput)'
+
+- task: PublishBuildArtifacts@1
+  displayName: 'publish packages as build artifact'
+  inputs:
+    PathtoPublish: '$(packageOutput)'
+    ArtifactName: 'packages'
+
+- task: NuGetCommand@2
+  displayName: 'push all nuget packages'
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  inputs:
+    command: 'push'
+    packagesToPush: '$(packageOutput)/*.nupkg'
+    nuGetFeedType: 'external'
+    publishFeedCredentials: '$(nugetServiceConnection)'
