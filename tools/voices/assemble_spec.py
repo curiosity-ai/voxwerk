@@ -5,7 +5,8 @@ Usage: python assemble_spec.py <meta_in_dir> <meta_out_dir> <spec_out.json> [<pr
 * ids: <lang>-<country>-<first>-<last> in kebab-case (ASCII-folded), unique across all packages;
 * names must be unique and must not reuse any original catalog name;
 * descriptions / scripts must not copy any 4-word phrase from the original catalog text or preview transcript;
-* the spoken script is "Hi, I'm <First>. <intro> <sentence>".
+* the spoken script is "Hi, I'm <First>. <intro> <sentence>";
+* licensed celebrity / "iconic" voices of the source catalog are excluded entirely (no sound-alikes of real people).
 Entries that fail a check are written to the problems file for rewriting and left out of the spec.
 """
 import glob, hashlib, json, os, re, sys, unicodedata
@@ -40,6 +41,8 @@ for f in sorted(glob.glob(os.path.join(meta_out, "batch_*.json"))):
     for o in json.load(open(f, encoding="utf-8")):
         e = inputs.get(o.get("source_id"))
         if e is None: continue
+        if "™" in e["original_text"] or "iconic" in e["original_text"].lower():
+            continue  # celebrity voice: never recreate, not even as a description-based sound-alike
         issues = []
         name = " ".join(o["name"].split())
         first = name.split()[0]
@@ -50,7 +53,9 @@ for f in sorted(glob.glob(os.path.join(meta_out, "batch_*.json"))):
         if nk in seen_names: issues.append("duplicate name")
         script = f"Hi, I'm {first}. {o['intro'].strip()} {o['sentence'].strip()}"
         src = grams(e["original_text"]) | grams(e["transcript"])
-        copied = (grams(o["description"]) | grams(o["intro"]) | grams(o["sentence"]) | grams(o["design_prompt"])) & src - allowed
+        copied = (grams(o["description"]) | grams(o["intro"]) | grams(o["sentence"])) & src - allowed
+        # design prompts are attribute lists ("a middle-aged man with a General American accent"); only flag long copies
+        copied |= grams(o["design_prompt"], 6) & (grams(e["original_text"], 6) | grams(e["transcript"], 6))
         if copied: issues.append("copied phrases: " + "; ".join(sorted(copied)[:3]))
         if o.get("gender") not in ("female", "male"): issues.append("bad gender")
         if o.get("age") not in ("young", "middle-aged", "old"): issues.append("bad age")

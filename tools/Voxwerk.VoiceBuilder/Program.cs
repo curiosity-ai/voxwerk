@@ -127,6 +127,7 @@ internal static class Commands
         bool force = o.ContainsKey("force");
         var todo = spec.Where(s => File.Exists(WavPath(work, s.Id)) && (force || !File.Exists(CodesPath(work, s.Id + ".clone")))).ToList();
         Console.Error.WriteLine($"{todo.Count} voices to clone");
+        int seedOffset = o.TryGetValue("seed-offset", out var so) ? int.Parse(so, CultureInfo.InvariantCulture) : 0;
         if (todo.Count == 0) return 0;
         int threads = o.TryGetValue("threads", out var th) ? int.Parse(th, CultureInfo.InvariantCulture) : 0;
         using var tts = Qwen3Tts.Load(o["model"], threads);
@@ -143,7 +144,7 @@ internal static class Commands
                 var voice = tts.CreateVoiceClonePrompt(AudioFile.ReadMono(WavPath(work, s.Id), 24000), s.Script);
                 WriteCodes(Path.Combine(work, "codes", s.Id + ".clone.ctx"), voice.ReferenceCodes!.ToList());
                 return new TalkerGenerator.BatchJob(gen.BuildPrompt(CloneSentence, "english", voice, nonStreaming: false, tts.Parallelism),
-                    new GenerationOptions { MaxNewTokens = 400, Seed = s.Seed + 7 });
+                    new GenerationOptions { MaxNewTokens = 400, Seed = s.Seed + 7 + seedOffset });
             }).ToList();
             gen.GenerateBatch(jobs, batch, tts.Parallelism, (job, codes) =>
             {
@@ -178,7 +179,9 @@ internal static class Commands
             if (File.Exists(ctxPath))
             {
                 // Clone samples: decode behind the reference codes (acoustic context) and cut them off, like Qwen3Tts.Decode.
+                // 25 frames (2 s) of context - the same left context the reference uses between decoder chunks.
                 var ctx = ReadCodes(ctxPath);
+                if (ctx.Count > SpeechDecoder.LeftContext) ctx = ctx.GetRange(ctx.Count - SpeechDecoder.LeftContext, SpeechDecoder.LeftContext);
                 var all = ctx.Concat(codes).ToList();
                 var full = dec.Decode(all, Parallelism.Single);
                 wav = full[(int)((double)ctx.Count / all.Count * full.Length)..];
