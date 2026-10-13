@@ -1,15 +1,18 @@
 """Dump layer-by-layer reference tensors from the official qwen-tts PyTorch implementation.
 
 Usage:
-    python dump_reference.py <model_dir> <ref_wav> <out_dir> [max_new_tokens]
+    python dump_reference.py <base_model_dir> <ref_wav> <out_dir> [max_new_tokens]
+    python dump_reference.py --mode design <voice_design_model_dir> <out_dir> [max_new_tokens]
+    python dump_reference.py --mode custom <custom_voice_model_dir> <out_dir> [max_new_tokens]
 
-Runs a deterministic (greedy) voice-clone generation and stores every intermediate the C# port is
-compared against as .npy files in <out_dir>. The Voxwerk parity tests read them through the
-VOXWERK_REFERENCE_DIR environment variable.
+Runs deterministic (greedy) generations and stores every intermediate the C# port is compared against as
+.npy files in <out_dir>. The Voxwerk parity tests read them through VOXWERK_REFERENCE_DIR (Base),
+VOXWERK_DESIGN_REFERENCE_DIR and VOXWERK_CUSTOM_REFERENCE_DIR (with the matching *_MODEL_DIR variables).
 """
 import json
 import os
 import sys
+
 
 import numpy as np
 import soundfile as sf
@@ -17,6 +20,90 @@ import torch
 
 from qwen_tts import Qwen3TTSModel
 from qwen_tts.core.models.modeling_qwen3_tts import mel_spectrogram
+
+def dump_mode(mode, model_dir, out, max_new):
+    """Greedy VoiceDesign / CustomVoice generations with the talker's prompt, layers, logits and codes."""
+    os.makedirs(out, exist_ok=True)
+    tts = Qwen3TTSModel.from_pretrained(model_dir, device_map="cpu", dtype=torch.float32)
+    model, talker = tts.model, tts.model.talker
+
+    def save(name, t):
+        if isinstance(t, torch.Tensor):
+            t = t.detach().float().cpu().numpy() if t.is_floating_point() else t.detach().cpu().numpy().astype(np.int64)
+        np.save(os.path.join(out, name + ".npy"), np.ascontiguousarray(t))
+
+    if mode == "design":
+        cases = [
+            {"name": "design", "text": "Good morning! The weather today is sunny with a light breeze.", "language": "English",
+             "instruct": "A cheerful young woman with a bright, energetic voice, speaking quickly."},
+        ]
+    else:
+        cases = [
+            {"name": "custom", "text": "Good morning! The weather today is sunny with a light breeze.", "language": "English",
+             "speaker": "ryan", "instruct": "Speak slowly in a calm, deep voice."},
+            {"name": "custom_dialect", "text": "今天天气很好，我们一起去公园散步吧。", "language": "Auto", "speaker": "eric"},
+        ]
+    meta = {"model_type": model.tts_model_type, "model_size": model.tts_model_size, "cases": cases}
+    with open(os.path.join(out, "cases.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+    for case in cases:
+        rec = {"prefill": None, "logits": [], "cp_logits": [], "cp_calls": 0}
+        layer_outs = []
+
+        def model_hook(m, args, kwargs, o):
+            emb = kwargs["inputs_embeds"]
+            if emb.shape[1] > 1 and rec["prefill"] is None:
+                rec["prefill"] = emb[0]
+
+        hooks = [talker.model.register_forward_hook(model_hook, with_kwargs=True)]
+        for i, layer in enumerate(talker.model.layers):
+            hooks.append(layer.register_forward_hook(
+                lambda m, a, o, i=i: layer_outs.append((i, o[0][0])) if o[0].shape[1] > 1 else None))
+        hooks.append(talker.codec_head.register_forward_hook(lambda m, a, o: rec["logits"].append(o[0, -1])))
+
+        def cp_hook(m, a, o):
+            if rec["cp_calls"] < 30:
+                rec["cp_logits"].append(o[0, -1])
+            rec["cp_calls"] += 1
+
+        for head in talker.code_predictor.lm_head:
+            hooks.append(head.register_forward_hook(cp_hook))
+        greedy = dict(max_new_tokens=max_new, do_sample=False, subtalker_dosample=False)
+        with torch.inference_mode():
+            if mode == "design":
+                wavs, sr = tts.generate_voice_design(text=case["text"], instruct=case["instruct"], language=case["language"], **greedy)
+            else:
+                wavs, sr = tts.generate_custom_voice(text=case["text"], speaker=case["speaker"], language=case["language"],
+                                                     instruct=case.get("instruct"), **greedy)
+            # the codes: re-run the talker part only to get them
+        for h in hooks:
+            h.remove()
+        n = case["name"]
+        save(f"{n}_prefill_in", rec["prefill"])
+        for i, t in layer_outs[:28]:
+            save(f"{n}_layer{i}", t)
+        save(f"{n}_logits", torch.stack(rec["logits"]))
+        save(f"{n}_cp_logits", torch.stack(rec["cp_logits"]))
+        save(f"{n}_wav", torch.from_numpy(wavs[0]))
+        print(n, "prefill", tuple(rec["prefill"].shape), "steps", len(rec["logits"]), "audio", len(wavs[0]) / sr)
+
+        # Greedy codes, recomputed through the same public generate() path.
+        input_ids = tts._tokenize_texts([tts._build_assistant_text(case["text"])])
+        ins = case.get("instruct") if (mode == "design" or model.tts_model_size not in "0b6") else None
+        instruct_ids = [tts._tokenize_texts([tts._build_instruct_text(ins)])[0]] if ins else [None]
+        with torch.inference_mode():
+            codes, _ = model.generate(input_ids=input_ids, instruct_ids=instruct_ids, languages=[case["language"]],
+                                      speakers=[case["speaker"]] if mode == "custom" else None,
+                                      non_streaming_mode=True, repetition_penalty=1.05, **greedy)
+        save(f"{n}_codes", codes[0])
+    print("done")
+
+
+if len(sys.argv) > 2 and sys.argv[1] == "--mode":
+    torch.set_num_threads(int(os.environ.get("THREADS", "4")))
+    dump_mode(sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5]) if len(sys.argv) > 5 else 24)
+    sys.exit(0)
 
 torch.set_num_threads(1)
 model_dir, ref_wav, out = sys.argv[1], sys.argv[2], sys.argv[3]

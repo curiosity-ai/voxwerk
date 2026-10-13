@@ -10,15 +10,24 @@ return await Cli.RunAsync(args);
 internal static class Cli
 {
     private const string Usage = """
-        voxwerk - Qwen3-TTS (12Hz 0.6B Base) voice-cloning text-to-speech in pure C#
+        voxwerk - Qwen3-TTS (12Hz) text-to-speech in pure C#
 
         Usage:
-          voxwerk synth --text <text> --ref <ref.wav> [--ref-text <transcript>] [options]
+          voxwerk synth  --text <text> --ref <ref.wav> [--ref-text <transcript>] [options]   clone a voice (Base models)
+          voxwerk design --text <text> --voice <description> [options]                     describe a voice (VoiceDesign)
+          voxwerk custom --text <text> --speaker <name> [--instruct <style>] [options]     built-in speakers (CustomVoice)
+          voxwerk speakers  [--model <dir|repo>]
           voxwerk languages [--model <dir|repo>]
-          voxwerk download [--model <repo>]
+          voxwerk download  [--model <repo>]
+
+        Default models: synth → Qwen/Qwen3-TTS-12Hz-0.6B-Base, design → Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign,
+        custom → Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice (use --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice for --instruct).
 
         Input:
           --text <text>            Text to speak (or --text-file <path>)
+          --voice <description>    Voice design: natural-language description of the voice (or --voice-file <path>)
+          --speaker <name>         Custom voice: built-in speaker (see `voxwerk speakers`)
+          --instruct <style>       Custom voice: speaking-style instruction (1.7B CustomVoice only)
           --ref <wav>              Reference voice recording (any sample rate, mixed to mono)
           --ref-text <text>        Transcript of the reference (enables ICL mode, best quality)
                                    (or --ref-text-file <path>)
@@ -42,7 +51,8 @@ internal static class Cli
           --top-p <p>              Talker top-p (1.0)              --repetition-penalty <r> (1.05)
           --sub-temperature <t>    Code predictor temperature (0.9) --sub-top-k <k> (50)
           --max-frames <n>         Max generated 12.5 Hz frames (2048)
-          --non-streaming          Put the full text in the prompt (non-streaming text layout)
+          --non-streaming          Put the full text in the prompt (default for design / custom)
+          --streaming              Stream the text alongside generation (default for synth)
         """;
 
     public static async Task<int> RunAsync(string[] args)
@@ -59,10 +69,21 @@ internal static class Cli
             {
                 case "synth":
                     return await SynthAsync(opts);
+                case "design":
+                    return await DesignAsync(opts);
+                case "custom":
+                    return await CustomAsync(opts);
                 case "languages":
                 {
-                    using var tts = await LoadAsync(opts);
+                    using var tts = await LoadAsync(opts, ModelDownloader.DefaultRepo);
                     Console.WriteLine(string.Join(Environment.NewLine, tts.Languages));
+                    return 0;
+                }
+                case "speakers":
+                {
+                    using var tts = await LoadAsync(opts, Qwen3Tts.ExampleRepo(Qwen3TtsModelType.CustomVoice));
+                    foreach (var spk in tts.Speakers)
+                        Console.WriteLine(tts.Config.SpeakerDialects.TryGetValue(spk, out var d) ? $"{spk} ({d.Replace('_', ' ')})" : spk);
                     return 0;
                 }
                 case "download":
@@ -86,7 +107,7 @@ internal static class Cli
 
     private static Dictionary<string, string?> Parse(string[] args)
     {
-        var flags = new HashSet<string> { "x-vector-only", "float32", "greedy", "non-streaming", "int8" };
+        var flags = new HashSet<string> { "x-vector-only", "float32", "greedy", "non-streaming", "streaming", "int8" };
         var d = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < args.Length; i++)
         {
@@ -104,18 +125,18 @@ internal static class Cli
     private static float F(Dictionary<string, string?> o, string key, float dflt) => Get(o, key) is { } v ? float.Parse(v, CultureInfo.InvariantCulture) : dflt;
     private static int I(Dictionary<string, string?> o, string key, int dflt) => Get(o, key) is { } v ? int.Parse(v, CultureInfo.InvariantCulture) : dflt;
 
-    private static async Task<Qwen3Tts> LoadAsync(Dictionary<string, string?> o)
+    private static async Task<Qwen3Tts> LoadAsync(Dictionary<string, string?> o, string defaultModel)
     {
         var sw = Stopwatch.StartNew();
-        var tts = await Qwen3Tts.LoadAsync(Get(o, "model") ?? ModelDownloader.DefaultRepo, I(o, "threads", 0),
+        var tts = await Qwen3Tts.LoadAsync(Get(o, "model") ?? defaultModel, I(o, "threads", 0),
             Flag(o, "int8") ? WeightPrecision.Int8 : WeightPrecision.BFloat16, new Progress<string>(Console.Error.WriteLine));
-        Console.Error.WriteLine($"Model loaded in {sw.Elapsed.TotalSeconds:F1}s ({tts.Parallelism.MaxThreads} thread(s), {tts.Precision} talker weights).");
+        Console.Error.WriteLine($"Model loaded in {sw.Elapsed.TotalSeconds:F1}s ({tts.ModelType} {tts.Config.TtsModelSize}, {tts.Parallelism.MaxThreads} thread(s), {tts.Precision} talker weights).");
         return tts;
     }
 
     private static async Task<int> SynthAsync(Dictionary<string, string?> o)
     {
-        string text = Get(o, "text") ?? (Get(o, "text-file") is { } tf ? await File.ReadAllTextAsync(tf) : throw new ArgumentException("--text or --text-file is required."));
+        string text = await Text(o);
         string refPath = Get(o, "ref") ?? throw new ArgumentException("--ref <reference.wav> is required (the Base model clones a voice).");
         if (!File.Exists(refPath)) throw new FileNotFoundException($"Reference audio not found: {refPath}");
         string? refText = Get(o, "ref-text") ?? (Get(o, "ref-text-file") is { } rf ? await File.ReadAllTextAsync(rf) : null);
@@ -126,25 +147,63 @@ internal static class Cli
             xvec = true;
         }
 
-        bool greedy = Flag(o, "greedy");
-        var options = new GenerationOptions
-        {
-            MaxNewTokens = I(o, "max-frames", 2048),
-            RepetitionPenalty = F(o, "repetition-penalty", 1.05f),
-            NonStreamingMode = Flag(o, "non-streaming"),
-            Seed = Get(o, "seed") is { } s ? int.Parse(s, CultureInfo.InvariantCulture) : null,
-            Talker = new SamplingOptions { DoSample = !greedy, Temperature = F(o, "temperature", 0.9f), TopK = I(o, "top-k", 50), TopP = F(o, "top-p", 1f) },
-            SubTalker = new SamplingOptions { DoSample = !greedy, Temperature = F(o, "sub-temperature", 0.9f), TopK = I(o, "sub-top-k", 50), TopP = F(o, "sub-top-p", 1f) },
-        };
-
-        using var tts = await LoadAsync(o);
+        var options = Options(o);
+        using var tts = await LoadAsync(o, ModelDownloader.DefaultRepo);
         var sw = Stopwatch.StartNew();
         var voice = tts.CreateVoiceClonePrompt(refPath, refText, xvec);
         var tVoice = sw.Elapsed;
         Console.Error.WriteLine($"Voice prompt ({(voice.XVectorOnly ? "x-vector" : $"ICL, {voice.ReferenceCodes!.Length} ref frames")}) in {tVoice.TotalSeconds:F2}s");
 
-        var result = tts.Synthesize(text, voice, Get(o, "language") ?? "auto", options,
-            onFrame: n => { if (n % 25 == 0) Console.Error.Write($"\r  generated {n} frames ({n / 12.5:F1}s audio)"); });
+        var result = tts.Synthesize(text, voice, Get(o, "language") ?? "auto", options, onFrame: Progress);
+        return Report(o, result, tVoice);
+    }
+
+    private static async Task<int> DesignAsync(Dictionary<string, string?> o)
+    {
+        string text = await Text(o);
+        string voice = Get(o, "voice") ?? Get(o, "instruct") ?? (Get(o, "voice-file") is { } vf ? await File.ReadAllTextAsync(vf)
+            : throw new ArgumentException("--voice <description> is required, e.g. --voice \"A calm middle-aged man with a deep, warm voice\"."));
+        using var tts = await LoadAsync(o, Qwen3Tts.ExampleRepo(Qwen3TtsModelType.VoiceDesign));
+        var result = tts.SynthesizeVoiceDesign(text, voice, Get(o, "language") ?? "auto", Options(o), onFrame: Progress);
+        return Report(o, result, TimeSpan.Zero);
+    }
+
+    private static async Task<int> CustomAsync(Dictionary<string, string?> o)
+    {
+        string text = await Text(o);
+        using var tts = await LoadAsync(o, Qwen3Tts.ExampleRepo(Qwen3TtsModelType.CustomVoice));
+        string speaker = Get(o, "speaker") ?? throw new ArgumentException($"--speaker is required. Available: {string.Join(", ", tts.Speakers)}.");
+        string? instruct = Get(o, "instruct");
+        if (instruct != null && !tts.SupportsInstruct)
+            Console.Error.WriteLine("note: this CustomVoice checkpoint ignores --instruct (only the 1.7B CustomVoice model supports it).");
+        var result = tts.SynthesizeCustomVoice(text, speaker, Get(o, "language") ?? "auto", instruct, Options(o), onFrame: Progress);
+        return Report(o, result, TimeSpan.Zero);
+    }
+
+    private static async Task<string> Text(Dictionary<string, string?> o)
+        => Get(o, "text") ?? (Get(o, "text-file") is { } tf ? await File.ReadAllTextAsync(tf) : throw new ArgumentException("--text or --text-file is required."));
+
+    private static GenerationOptions Options(Dictionary<string, string?> o)
+    {
+        bool greedy = Flag(o, "greedy");
+        return new GenerationOptions
+        {
+            MaxNewTokens = I(o, "max-frames", 2048),
+            RepetitionPenalty = F(o, "repetition-penalty", 1.05f),
+            NonStreamingMode = Flag(o, "non-streaming") ? true : Flag(o, "streaming") ? false : null,
+            Seed = Get(o, "seed") is { } s ? int.Parse(s, CultureInfo.InvariantCulture) : null,
+            Talker = new SamplingOptions { DoSample = !greedy, Temperature = F(o, "temperature", 0.9f), TopK = I(o, "top-k", 50), TopP = F(o, "top-p", 1f) },
+            SubTalker = new SamplingOptions { DoSample = !greedy, Temperature = F(o, "sub-temperature", 0.9f), TopK = I(o, "sub-top-k", 50), TopP = F(o, "sub-top-p", 1f) },
+        };
+    }
+
+    private static void Progress(int n)
+    {
+        if (n % 25 == 0) Console.Error.Write($"\r  generated {n} frames ({n / 12.5:F1}s audio)");
+    }
+
+    private static int Report(Dictionary<string, string?> o, SynthesisResult result, TimeSpan tVoice)
+    {
         Console.Error.WriteLine();
         string outPath = Get(o, "out") ?? "out.wav";
         AudioFile.WriteWav(outPath, result.Audio, result.SampleRate, Flag(o, "float32"));
@@ -152,7 +211,7 @@ internal static class Cli
         Console.Error.WriteLine($"  prompt {result.PromptTime.TotalSeconds:F2}s | talker {result.TalkerTime.TotalSeconds:F2}s " +
                                 $"({result.TalkerTime.TotalMilliseconds / Math.Max(1, result.Codes.Length):F0} ms/frame) | decoder {result.DecoderTime.TotalSeconds:F2}s");
         double endToEnd = tVoice.TotalSeconds + result.TotalTime.TotalSeconds;
-        Console.Error.WriteLine($"  total {endToEnd:F2}s incl. voice prompt, RTF {endToEnd / result.AudioSeconds:F3}");
+        Console.Error.WriteLine($"  total {endToEnd:F2}s{(tVoice > TimeSpan.Zero ? " incl. voice prompt" : "")}, RTF {endToEnd / result.AudioSeconds:F3}");
         return 0;
     }
 }

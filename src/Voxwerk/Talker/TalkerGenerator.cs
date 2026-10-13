@@ -11,8 +11,10 @@ public sealed record GenerationOptions
     public float RepetitionPenalty { get; init; } = 1.05f;
     public SamplingOptions Talker { get; init; } = new();
     public SamplingOptions SubTalker { get; init; } = new();
-    /// <summary>Feed the whole text in the prompt instead of streaming it alongside the generated codes.</summary>
-    public bool NonStreamingMode { get; init; }
+    /// <summary>Feed the whole text in the prompt instead of streaming it alongside the generated codes.
+    /// <c>null</c> uses the reference default for the mode: streaming for voice cloning, non-streaming for
+    /// voice design and custom voices.</summary>
+    public bool? NonStreamingMode { get; init; }
     public int? Seed { get; init; }
 
     /// <summary>Deterministic argmax decoding for both stages (used by the parity tests).</summary>
@@ -47,37 +49,76 @@ public sealed unsafe class TalkerGenerator
 
     public static string AssistantText(string text) => $"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n";
     public static string RefText(string text) => $"<|im_start|>assistant\n{text}<|im_end|>\n";
+    public static string InstructText(string text) => $"<|im_start|>user\n{text}<|im_end|>\n";
 
-    /// <summary>Builds the talker input exactly like <c>Qwen3TTSForConditionalGeneration.generate</c> (Base / voice clone).</summary>
+    /// <summary>Voice-clone prompt (Base models).</summary>
     public Prompt BuildPrompt(string text, string language, VoiceClonePrompt voice, bool nonStreaming, Parallelism par)
+        => BuildPrompt(text, language, voice.SpeakerEmbedding, null, null,
+                       voice.XVectorOnly ? null : voice.ReferenceCodes, voice.XVectorOnly ? null : voice.ReferenceText, nonStreaming, par);
+
+    /// <summary>
+    /// Builds the talker input exactly like <c>Qwen3TTSForConditionalGeneration.generate</c>:
+    /// [instruction] + role + codec prefix (think / language tags, optional speaker) + text, with either
+    /// ICL reference codes (voice clone) or the text streamed / laid out in full.
+    /// </summary>
+    /// <param name="speakerEmbedding">x-vector of a cloned voice, or null.</param>
+    /// <param name="speaker">Named CustomVoice speaker (its codec embedding becomes the speaker slot), or null.</param>
+    /// <param name="instruct">Natural-language voice / style instruction, or null.</param>
+    public Prompt BuildPrompt(string text, string language, float[]? speakerEmbedding, string? speaker, string? instruct,
+                              int[][]? referenceCodes, string? referenceText, bool nonStreaming, Parallelism par)
     {
         int H = _m.Hidden;
         int[] ids = _tok.Encode(AssistantText(text));
         if (ids.Length < 9) throw new ArgumentException("Text is empty.", nameof(text));
+        language = string.IsNullOrEmpty(language) ? "auto" : language;
 
         var special = _m.ProjectText([_c.TtsBosTokenId, _c.TtsEosTokenId, _c.TtsPadTokenId], par);
         float[] ttsBos = special[..H], ttsEos = special[H..(2 * H)], ttsPad = special[(2 * H)..];
 
-        // Codec prefix: think/language tags, speaker x-vector, pad, bos.
+        float[]? speakerRow = speakerEmbedding;
+        if (speaker != null)
+        {
+            if (!_c.SpeakerIds.TryGetValue(speaker, out int spkId))
+                throw new ArgumentException($"Unknown speaker '{speaker}'. Available: {string.Join(", ", _c.SpeakerIds.Keys)}.", nameof(speaker));
+            speakerRow = new float[H];
+            fixed (float* sp = speakerRow) _m.CodecEmbedding(spkId, sp, add: false);
+        }
+        if (speakerRow != null && speakerRow.Length != H)
+            throw new ArgumentException($"Speaker embedding has {speakerRow.Length} values, the model expects {H}.");
+
+        // Language tag; dialect speakers replace Chinese / auto with their dialect.
+        int? langId = null;
+        if (!language.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            if (language.Contains("dialect", StringComparison.OrdinalIgnoreCase) || !_c.LanguageIds.TryGetValue(language, out int lid))
+                throw new ArgumentException($"Unsupported language '{language}'. Supported: auto, {string.Join(", ", _c.LanguageIds.Keys.Where(k => !k.Contains("dialect")))}.", nameof(language));
+            langId = lid;
+        }
+        if (speaker != null && (language.Equals("auto", StringComparison.OrdinalIgnoreCase) || language.Equals("chinese", StringComparison.OrdinalIgnoreCase))
+            && _c.SpeakerDialects.TryGetValue(speaker, out var dialect))
+            langId = _c.LanguageIds[dialect];
+
         var codecIds = new List<int>();
-        if (string.IsNullOrEmpty(language) || language.Equals("auto", StringComparison.OrdinalIgnoreCase))
-            codecIds.AddRange([_c.CodecNoThinkId, _c.CodecThinkBosId, _c.CodecThinkEosId]);
-        else if (_c.LanguageIds.TryGetValue(language, out int langId))
-            codecIds.AddRange([_c.CodecThinkId, _c.CodecThinkBosId, langId, _c.CodecThinkEosId]);
-        else
-            throw new ArgumentException($"Unsupported language '{language}'. Supported: auto, {string.Join(", ", _c.LanguageIds.Keys)}.", nameof(language));
+        if (langId is int l) codecIds.AddRange([_c.CodecThinkId, _c.CodecThinkBosId, l, _c.CodecThinkEosId]);
+        else codecIds.AddRange([_c.CodecNoThinkId, _c.CodecThinkBosId, _c.CodecThinkEosId]);
         int nTags = codecIds.Count;
-        int codecLen = nTags + 1 + 2;
+        int spkSlots = speakerRow != null ? 1 : 0;
+        int codecLen = nTags + spkSlots + 2;
         var codec = new float[codecLen * H];
         fixed (float* cp = codec)
         {
             for (int i = 0; i < nTags; i++) _m.CodecEmbedding(codecIds[i], cp + i * H, add: false);
-            voice.SpeakerEmbedding.AsSpan().CopyTo(codec.AsSpan(nTags * H, H));
-            _m.CodecEmbedding(_c.CodecPadId, cp + (nTags + 1) * H, add: false);
-            _m.CodecEmbedding(_c.CodecBosId, cp + (nTags + 2) * H, add: false);
+            speakerRow?.AsSpan().CopyTo(codec.AsSpan(nTags * H, H));
+            _m.CodecEmbedding(_c.CodecPadId, cp + (nTags + spkSlots) * H, add: false);
+            _m.CodecEmbedding(_c.CodecBosId, cp + (nTags + spkSlots + 1) * H, add: false);
         }
 
         var rows = new List<float[]>();
+        if (!string.IsNullOrEmpty(instruct))
+        {
+            var ins = _m.ProjectText(_tok.Encode(InstructText(instruct)), par);
+            for (int i = 0; i < ins.Length / H; i++) rows.Add(ins[(i * H)..((i + 1) * H)]);
+        }
         // <|im_start|>assistant\n
         var role = _m.ProjectText(ids.AsSpan(0, 3), par);
         for (int i = 0; i < 3; i++) rows.Add(role[(i * H)..((i + 1) * H)]);
@@ -93,13 +134,13 @@ public sealed unsafe class TalkerGenerator
         int[] textIds = ids[3..^5];
         float[] trailing;
         int trailingLen;
-        if (!voice.XVectorOnly)
+        if (referenceCodes != null && !string.IsNullOrEmpty(referenceText))
         {
-            int[] refIds = _tok.Encode(RefText(voice.ReferenceText!));
+            int[] refIds = _tok.Encode(RefText(referenceText));
             int[] icl = [.. refIds[3..^2], .. textIds];
             var textEmb = Concat(_m.ProjectText(icl, par), ttsEos);
             int textLen = textEmb.Length / H;
-            var refCodes = voice.ReferenceCodes!;
+            var refCodes = referenceCodes;
             int cLen = refCodes.Length + 1;
             var codecEmb = new float[cLen * H];
             fixed (float* ce = codecEmb)
@@ -173,13 +214,15 @@ public sealed unsafe class TalkerGenerator
 
         using var cache = _m.Model.CreateCache(prompt.Length + opts.MaxNewTokens + 1);
         using var cpCache = _m.CodePredictor.CreateCache(G + 1);
-        using var buf = new NativeBuffer<float>((long)prompt.Length * H * 2 + 8 * H + V + 4096);
+        int Hc = _m.CpHidden;
+        using var buf = new NativeBuffer<float>((long)prompt.Length * H * 2 + 4 * H + 4 * Hc + V + 4096);
         float* x = buf.Ptr, y = x + (long)prompt.Length * H;
         float* last = y + (long)prompt.Length * H;   // talker hidden (normed) of the latest position
         float* step = last + H;                      // next talker input
-        float* cpX = step + H;                       // [2, H]
-        float* cpY = cpX + 2 * H;                    // [2, H]
-        float* logits = cpY + 2 * H;                 // [V]
+        float* cpX = step + H;                       // [2, H] code predictor inputs at talker width
+        float* cpIn = cpX + 2 * H;                   // [2, Hc] projected inputs
+        float* cpY = cpIn + 2 * Hc;                  // [2, Hc]
+        float* logits = cpY + 2 * Hc;                // [V]
 
         fixed (float* pp = prompt.Prefill) Buffer.MemoryCopy(pp, x, (long)prompt.Length * H * 4, (long)prompt.Length * H * 4);
         _m.Model.Forward(x, prompt.Length, cache, y, par);
@@ -207,8 +250,9 @@ public sealed unsafe class TalkerGenerator
             cpCache.Length = 0;
             Buffer.MemoryCopy(last, cpX, H * 4, H * 4);
             _m.CodecEmbedding(code0, cpX + H, add: false);
-            _m.CodePredictor.Forward(cpX, 2, cpCache, cpY, par);
-            float* cpLast = cpY + H;
+            _m.ToCodePredictor(cpX, 2, cpIn, par);
+            _m.CodePredictor.Forward(cpIn, 2, cpCache, cpY, par);
+            float* cpLast = cpY + Hc;
             for (int g = 1; g < G; g++)
             {
                 fixed (float* cl = cpLogits)
@@ -219,7 +263,8 @@ public sealed unsafe class TalkerGenerator
                 }
                 if (g == G - 1) break;
                 _m.CodePredictorEmbedding(g, frame[g], cpX, add: false);
-                _m.CodePredictor.Forward(cpX, 1, cpCache, cpY, par);
+                _m.ToCodePredictor(cpX, 1, cpIn, par);
+                _m.CodePredictor.Forward(cpIn, 1, cpCache, cpY, par);
                 cpLast = cpY;
             }
             frames.Add(frame);

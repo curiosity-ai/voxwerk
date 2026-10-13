@@ -8,7 +8,14 @@ public sealed class Qwen3TtsConfig
     public int TtsBosTokenId { get; init; } = 151672;
     public int TtsEosTokenId { get; init; } = 151673;
     public int TtsPadTokenId { get; init; } = 151671;
+    /// <summary><c>base</c> (voice clone), <c>voice_design</c> (voice from a description) or <c>custom_voice</c> (named speakers).</summary>
     public string TtsModelType { get; init; } = "base";
+    /// <summary>Size tag from the checkpoint, e.g. <c>0b6</c> or <c>1b7</c>.</summary>
+    public string TtsModelSize { get; init; } = "0b6";
+    /// <summary>Built-in speakers (CustomVoice): name → codec token id.</summary>
+    public IReadOnlyDictionary<string, int> SpeakerIds { get; init; } = new Dictionary<string, int>();
+    /// <summary>Speakers that speak a dialect: name → dialect language key (e.g. <c>sichuan_dialect</c>).</summary>
+    public IReadOnlyDictionary<string, string> SpeakerDialects { get; init; } = new Dictionary<string, string>();
 
     public int HiddenSize { get; init; } = 1024;
     public int IntermediateSize { get; init; } = 3072;
@@ -49,12 +56,22 @@ public sealed class Qwen3TtsConfig
         var cp = t.GetProperty("code_predictor_config");
         var langs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in t.GetProperty("codec_language_id").EnumerateObject()) langs[p.Name] = p.Value.GetInt32();
+        var speakers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (t.TryGetProperty("spk_id", out var spk))
+            foreach (var p in spk.EnumerateObject()) speakers[p.Name] = p.Value.GetInt32();
+        var dialects = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (t.TryGetProperty("spk_is_dialect", out var dia))
+            foreach (var p in dia.EnumerateObject())
+                if (p.Value.ValueKind == JsonValueKind.String) dialects[p.Name] = p.Value.GetString()!;
         return new Qwen3TtsConfig
         {
             TtsBosTokenId = r.GetProperty("tts_bos_token_id").GetInt32(),
             TtsEosTokenId = r.GetProperty("tts_eos_token_id").GetInt32(),
             TtsPadTokenId = r.GetProperty("tts_pad_token_id").GetInt32(),
             TtsModelType = r.TryGetProperty("tts_model_type", out var mt) ? mt.GetString()! : "base",
+            TtsModelSize = r.TryGetProperty("tts_model_size", out var ms) ? ms.GetString()! : "0b6",
+            SpeakerIds = speakers,
+            SpeakerDialects = dialects,
             HiddenSize = t.GetProperty("hidden_size").GetInt32(),
             IntermediateSize = t.GetProperty("intermediate_size").GetInt32(),
             NumLayers = t.GetProperty("num_hidden_layers").GetInt32(),

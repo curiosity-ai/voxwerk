@@ -1,13 +1,19 @@
 # voxwerk
 
-Pure C# (.NET 10) inference for **[Qwen3-TTS-12Hz-0.6B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base)**,
-Qwen's voice-cloning text-to-speech model, as a library plus a command-line tool.
+Pure C# (.NET 10) inference for Qwen's **[Qwen3-TTS](https://huggingface.co/collections/Qwen/qwen3-tts) 12 Hz**
+text-to-speech models, as a library plus a command-line tool. All three voice modes are supported:
+
+| Mode | What it does | Checkpoints | CLI |
+|---|---|---|---|
+| Voice clone | Speak in the voice of a reference recording | [0.6B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base), [1.7B-Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) | `voxwerk synth` |
+| Voice design | Create a voice from a natural-language description | [1.7B-VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign) | `voxwerk design` |
+| Custom voice | 9 built-in speakers (incl. Sichuan / Beijing dialect), optional style instruction (1.7B) | [0.6B-CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice), [1.7B-CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice) | `voxwerk custom` |
 
 - No Python, no ONNX, no native dependencies: tokenizer, transformers, codec and vocoder are all managed
   code with hand-written AVX-512 / AVX2 kernels (`System.Runtime.Intrinsics`). [NAudio](https://github.com/naudio/NAudio)
   is used for WAV I/O and resampling.
 - Validated layer by layer against the official PyTorch implementation (`qwen-tts`), see [Validation](#validation).
-- About **2.2–2.5× faster than the PyTorch reference on a single CPU core**, see [Performance](#performance).
+- About **2.3–2.5× faster than the PyTorch reference on a single CPU core** in every mode, see [Performance](#performance).
 
 ## Quick start
 
@@ -21,18 +27,33 @@ dotnet run -c Release --project src/Voxwerk.Cli -- synth \
     --out hello.wav
 ```
 
-`voxwerk synth` options (run `voxwerk --help` for all of them):
+```bash
+# Voice design: describe the voice (downloads Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign)
+voxwerk design --voice "An elderly man with a slow, raspy, gentle voice, like a grandfather telling a story." \
+    --text "Once upon a time, there was a little fox." --language english --out story.wav
+
+# Built-in speakers (downloads Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice); `voxwerk speakers` lists them
+voxwerk custom --speaker serena --text "Good morning!" --out morning.wav
+# Style instructions need the 1.7B CustomVoice checkpoint
+voxwerk custom --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --speaker ryan \
+    --instruct "Speak in an excited, very fast voice." --text "We won the game!" --out excited.wav
+```
+
+(`voxwerk` = `dotnet run -c Release --project src/Voxwerk.Cli --`.) Common options (run `voxwerk --help` for all of them):
 
 | Option | Meaning |
 |---|---|
 | `--ref <wav>` | Reference recording to clone (any sample rate or channel count; mixed to mono and resampled to 24 kHz) |
 | `--ref-text <text>` | Transcript of the reference. Enables ICL mode (best similarity). Without it, x-vector-only cloning is used |
 | `--x-vector-only` | Clone from the speaker embedding only |
+| `--voice <text>` | `design`: description of the voice (timbre, gender, age, emotion, pace, ...) |
+| `--speaker <name>` | `custom`: serena, vivian, uncle_fu, ryan, aiden, ono_anna, sohee, eric (Sichuan dialect), dylan (Beijing dialect) |
+| `--instruct <text>` | `custom`: speaking-style instruction (1.7B CustomVoice only; the 0.6B model ignores it, like the reference) |
 | `--language <name>` | `auto` (default), `english`, `chinese`, `german`, `french`, `spanish`, `italian`, `portuguese`, `russian`, `japanese`, `korean` |
-| `--model <dir\|repo>` | Local model directory or Hugging Face repo id (default `Qwen/Qwen3-TTS-12Hz-0.6B-Base`) |
+| `--model <dir\|repo>` | Local model directory or Hugging Face repo id (defaults per command, see the table above) |
 | `--threads <n>` | Worker threads (default: all cores; `1` = single core) |
 | `--int8` | Store talker weights as int8 (faster, approximate; see below) |
-| `--seed`, `--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`, `--sub-temperature`, `--sub-top-k`, `--max-frames`, `--greedy`, `--non-streaming` | Generation settings, with the same defaults as the model's `generation_config.json` |
+| `--seed`, `--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`, `--sub-temperature`, `--sub-top-k`, `--max-frames`, `--greedy`, `--non-streaming` / `--streaming` | Generation settings, with the same defaults as the model's `generation_config.json` (text layout defaults follow the reference: streaming for cloning, non-streaming for design / custom) |
 
 ### Library
 
@@ -49,7 +70,17 @@ AudioFile.WriteWav("hello.wav", result.Audio, result.SampleRate);
 Console.WriteLine($"{result.AudioSeconds:F1}s of audio, RTF {result.RealTimeFactor:F2}");
 ```
 
-A `VoiceClonePrompt` (speaker x-vector + reference codes) can be built once and reused for many sentences.
+```csharp
+using var designer = await Qwen3Tts.LoadAsync("Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign");
+var a = designer.SynthesizeVoiceDesign("Hello!", "A cheerful young woman with a bright, energetic voice.");
+
+using var custom = await Qwen3Tts.LoadAsync("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice");
+var b = custom.SynthesizeCustomVoice("Hello!", speaker: "ryan", instruct: "Whisper softly.");   // custom.Speakers lists names
+```
+
+`ModelType` tells which mode a loaded checkpoint supports; calling another mode's method throws a
+`NotSupportedException` naming a suitable checkpoint. A `VoiceClonePrompt` (speaker x-vector + reference codes)
+can be built once and reused for many sentences.
 Lower-level pieces (`GenerateCodes`, `Decode`, `Qwen2Tokenizer`, `SpeechEncoder`, `SpeechDecoder`,
 `SpeakerEncoder`) are public as well.
 
@@ -58,9 +89,12 @@ Lower-level pieces (`GenerateCodes`, `Decode`, `Qwen2Tokenizer`, `SpeechEncoder`
 ```
 reference.wav ──► log-mel (STFT, Slaney mel) ──► ECAPA-TDNN speaker encoder ──► x-vector ─────────┐
               └─► Mimi encoder (SEANet + transformer + split RVQ) ──► reference codes (12.5 Hz × 16) ┤
+voice description / style instruction ──► Qwen2 BPE ──► text embedding + projection ───────────────┤
+built-in speaker ──► codec speaker embedding ───────────────────────────────────────────────────────┤
 text ──► Qwen2 BPE ──► text embedding + projection ──────────────────────────────────────────────────┤
                                                                                                      ▼
             talker: 28-layer Qwen3 decoder ──► codebook 0 ──► code predictor (5 layers) ──► codebooks 1..15
+            (1.7B: 2048-wide talker, projected to the 1024-wide code predictor)
                                                                                                      ▼
             speech decoder: RVQ ► causal conv ► 8-layer sliding-window transformer ► 2×(ConvT + ConvNeXt)
                             ► SnakeBeta vocoder (×8·5·4·3) ──► 24 kHz waveform (1920 samples per frame)
@@ -121,6 +155,12 @@ intermediate tensor; the xUnit parity tests compare the C# implementation agains
 | Generation | greedy codec frames, ICL and x-vector modes | **identical (0 / 368)** |
 | Speech decoder | RVQ, pre-conv, transformer, upsamplers, every vocoder block | ≤ 6.2e-6 |
 | Waveform | 9.9 s decoded audio | 2.7e-6 (max abs 5.1e-6) |
+| Base 1.7B | same clone suite: speaker encoder (2048-d x-vector), prompt, 28 talker layers, logits, greedy codes | x-vector 5.8e-7, layers ≤ 1.3e-5, logits ≤ 3.7e-6, **codes identical (0 / 368)** |
+| VoiceDesign 1.7B | prompt with description, talker layers, logits, greedy codes | prompt 8.3e-7, layers ≤ 1.1e-5, logits ≤ 4.3e-6, **codes identical (0 / 368)** |
+| CustomVoice 0.6B | speaker prompt incl. Sichuan-dialect speaker | layers ≤ 2.0e-5, logits ≤ 5.4e-6, **codes identical (0 / 368 per case)** |
+| CustomVoice 1.7B | speaker + style instruction, dialect speaker | layers ≤ 1.2e-5, logits ≤ 6.3e-6, **codes identical (0 / 368 per case)** |
+
+All four checkpoints share the same speech tokenizer (byte-identical), so the codec results apply to every mode.
 
 End-to-end checks with sampling (default settings, seed 1234, single thread). Whisper transcription, plus
 cosine similarity to the reference voice measured with the reference implementation's own speaker encoder:
@@ -130,6 +170,15 @@ cosine similarity to the reference voice measured with the reference implementat
 | PyTorch reference | 0.991 | "Hello there. This is a quick test of the text to speech system running on a single CPU core." |
 | Voxwerk (bf16) | 0.990 | "Hello there! This is a quick test of the text-to-speech system running on a single CPU core." |
 | Voxwerk (`--int8`) | 0.989 | "Hello there. This is a quick test of the text to speech system running on a single CPU core." |
+
+Voice design and custom voices with sampling (seed 7, single thread), transcribed by Whisper; the median pitch
+shows the requested voices come through:
+
+| Output | Median F0 | Whisper (base.en) transcript |
+|---|---|---|
+| design: "An elderly man with a slow, raspy, gentle voice..." | 121 Hz | "Good morning. The weather today is sunny with a light breeze, perfect for a walk in the park." |
+| custom 0.6B: serena | 244 Hz | "Good morning! The weather today is sunny with a light breeze. Perfect for a walk in the park." |
+| custom 1.7B: ryan, "Speak in an excited, very fast voice." | 232 Hz | same text, 5.5 s instead of 6.7 s |
 
 Note: pure greedy decoding degenerates to near-silence for this model in both implementations (that is why the
 reference samples by default). It is only used to make parity tests deterministic.
@@ -143,6 +192,13 @@ dotnet test -c Release                       # kernel unit tests (parity tests s
 python -m venv .venv && .venv/bin/pip install qwen-tts torch torchaudio
 .venv/bin/python scripts/dump_reference.py /path/to/Qwen3-TTS-12Hz-0.6B-Base reference.wav /tmp/refdump
 VOXWERK_MODEL_DIR=/path/to/Qwen3-TTS-12Hz-0.6B-Base VOXWERK_REFERENCE_DIR=/tmp/refdump dotnet test -c Release
+
+# VoiceDesign / CustomVoice parity (keys DESIGN, CUSTOM, CUSTOM17)
+.venv/bin/python scripts/dump_reference.py --mode design /path/to/Qwen3-TTS-12Hz-1.7B-VoiceDesign /tmp/ref_design
+.venv/bin/python scripts/dump_reference.py --mode custom /path/to/Qwen3-TTS-12Hz-0.6B-CustomVoice /tmp/ref_custom
+VOXWERK_DESIGN_MODEL_DIR=/path/to/Qwen3-TTS-12Hz-1.7B-VoiceDesign VOXWERK_DESIGN_REFERENCE_DIR=/tmp/ref_design \
+VOXWERK_CUSTOM_MODEL_DIR=/path/to/Qwen3-TTS-12Hz-0.6B-CustomVoice VOXWERK_CUSTOM_REFERENCE_DIR=/tmp/ref_custom \
+    dotnet test -c Release --filter ModeParity
 ```
 
 The reference voice used here is the sample from the model card
@@ -171,11 +227,21 @@ sample. The VM's timings vary by about ±10% between runs.
 | Voxwerk (bf16) | 5.44 s | 48.7 s | 8.9 |
 | Voxwerk (`--int8`) | 5.52 s | 35.1 s | 6.4 |
 
+**Voice design and custom voices**, same workload (greedy, capped at 100 frames; both implementations stop at
+the same frame):
+
+| Mode | PyTorch | Voxwerk (bf16) | Speed-up |
+|---|---|---|---|
+| VoiceDesign 1.7B (99 frames) | 165.4 s (RTF 20.9; 1534 ms/frame) | 71.3 s (RTF 9.0; 648 ms/frame) | 2.3× |
+| CustomVoice 0.6B (90 frames) | 104.4 s (RTF 14.5; 988 ms/frame) | 43.0 s (RTF 6.0; 408 ms/frame) | 2.4× |
+
 Reproduce with `scripts/bench_reference.py` (prints the same phase breakdown as `voxwerk synth`):
 
 ```bash
 python scripts/bench_reference.py /path/to/model reference.wav --ref-text "..." --text "..." --threads 1 --greedy --max-frames 100
 voxwerk synth --model /path/to/model --ref reference.wav --ref-text "..." --text "..." --threads 1 --greedy --max-frames 100
+python scripts/bench_reference.py /path/to/voice_design_model --mode design --voice "..." --text "..." --threads 1 --greedy --max-frames 100
+voxwerk design --model /path/to/voice_design_model --voice "..." --text "..." --threads 1 --greedy --max-frames 100
 ```
 
 Multi-threading (`--threads N`, default all cores) parallelizes the GEMMs, convolutions and attention. The same
