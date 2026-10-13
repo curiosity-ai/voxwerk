@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Voxwerk Voices</title>
+  <meta name="description" content="Browse, search and listen to the ready-made English voices of Voxwerk, the pure C# Qwen3-TTS library.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b2471f'/%3E%3Cpath d='M9 13v6M13 9v14M17 11v10M21 7v18M25 13v6' stroke='%23fff8f3' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="masthead">
+    <div class="wrap">
+      <p class="kicker">Voxwerk · Qwen3-TTS in pure C#</p>
+      <h1>English voices</h1>
+      <p class="lede">Every voice ships as metadata in <code>Voxwerk.Voices.English</code> and can be spoken with the
+        VoiceDesign model from its design prompt. Add the voice's audio package to clone it with the Base model instead.
+        Each sample below is the voice introducing itself.</p>
+      <p class="links"><a href="https://github.com/theolivenbaum/voxwerk">GitHub</a><span aria-hidden="true">·</span><a href="https://www.nuget.org/packages/Voxwerk.Cli">dotnet tool install -g Voxwerk.Cli</a></p>
+    </div>
+  </header>
+
+  <div class="toolbar" id="toolbar">
+    <div class="wrap toolbar-inner">
+      <label class="search">
+        <span class="visually-hidden">Search voices</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="Search names, descriptions, tags… e.g. “warm narration”" autocomplete="off">
+      </label>
+      <div class="filters">
+        <label><span>Region</span><select id="region"><option value="">All regions</option></select></label>
+        <label><span>Accent</span><select id="category"><option value="">All accents</option></select></label>
+        <label><span>Style</span><select id="style"><option value="">All styles</option></select></label>
+        <label><span>Gender</span><select id="gender"><option value="">Any</option></select></label>
+        <label><span>Age</span><select id="age"><option value="">Any</option></select></label>
+        <button id="favs" type="button" class="ghost toggle" aria-pressed="false" title="Show only your favorite voices">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>
+          Favorites <span id="favcount" class="badge"></span>
+        </button>
+        <button id="reset" type="button" class="ghost">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="wrap">
+    <p class="count" id="count" aria-live="polite">Loading voices…</p>
+    <ol class="voices" id="voices"></ol>
+    <div id="sentinel" aria-hidden="true"></div>
+    <p class="empty" id="empty" hidden>No voice matches these filters.</p>
+  </main>
+
+  <footer class="wrap foot">
+    <p>Voices were written and generated with Qwen3-TTS VoiceDesign; samples are 24 kbps Ogg Opus. Code under the MIT
+      license; Qwen3-TTS weights under Apache-2.0.</p>
+  </footer>
+
+  <template id="card">
+    <li class="voice">
+      <button class="play" type="button" aria-label="Play sample">
+        <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+      </button>
+      <div class="body">
+        <div class="head">
+          <h2 class="name"></h2>
+          <button class="id" type="button" title="Copy id"></button>
+          <button class="fav" type="button" aria-pressed="false" aria-label="Add to favorites" title="Add to favorites">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>
+          </button>
+        </div>
+        <p class="meta"></p>
+        <p class="desc"></p>
+        <div class="progress" aria-hidden="true"><span></span></div>
+        <details>
+          <summary>Sample text, design prompt and usage</summary>
+          <dl>
+            <dt>Sample</dt><dd class="sample"></dd>
+            <dt>Design prompt</dt><dd class="prompt"></dd>
+            <dt>Speak it</dt><dd><pre class="usage"></pre></dd>
+            <dt>Audio package</dt><dd class="pkg"></dd>
+          </dl>
+        </details>
+        <ul class="tags"></ul>
+      </div>
+    </li>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
