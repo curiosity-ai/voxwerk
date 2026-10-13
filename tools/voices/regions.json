@@ -1,0 +1,52 @@
+{
+  "_comment": "Maps json2video/ElevenLabs English accent categories to Voxwerk voice packages (region) and the country id used in voice ids (<lang>-<country>-<name>).",
+  "regions": {
+    "American":      { "default_country": "us",   "description": "United States English: General American and regional US accents." },
+    "British":       { "default_country": "gb",   "description": "English accents of England and Wales, including Received Pronunciation." },
+    "Irish":         { "default_country": "ie",   "description": "Irish English." },
+    "Scottish":      { "default_country": "sct",  "description": "Scottish English." },
+    "Canadian":      { "default_country": "ca",   "description": "Canadian English." },
+    "Australian":    { "default_country": "au",   "description": "Australian English." },
+    "NewZealand":    { "default_country": "nz",   "description": "New Zealand English." },
+    "Indian":        { "default_country": "in",   "description": "Indian English, including Hindi- and Tamil-influenced accents." },
+    "African":       { "default_country": "ng",   "description": "African Englishes: Nigerian, South African and other African accents." },
+    "Asian":         { "default_country": "sg",   "description": "Southeast and East Asian Englishes: Filipino, Singaporean, Malaysian, Chinese, Japanese, Korean, Indonesian." },
+    "European":      { "default_country": "de",   "description": "English with continental European accents." },
+    "International": { "default_country": "intl", "description": "Other and mixed international accents (Caribbean, Middle Eastern, Turkish, unspecified)." }
+  },
+  "categories": {
+    "American": ["American", "us"], "Us southern": ["US Southern", "us"], "Us midwest": ["US Midwest", "us"], "Us northeast": ["US Northeast", "us"],
+    "New york": ["New York", "us"], "Boston": ["Boston", "us"], "Chicago": ["Chicago", "us"], "African american": ["African American", "us"], "En-american": ["American", "us"],
+    "British": ["British", "gb"], "Received pronunciation": ["Received Pronunciation", "gb"], "Yorkshire": ["Yorkshire", "gb"], "Geordie": ["Geordie", "gb"],
+    "Cockney": ["Cockney", "gb"], "Welsh": ["Welsh", "gb"], "En-british": ["British", "gb"],
+    "Irish": ["Irish", "ie"],
+    "Scottish": ["Scottish", "sct"], "En-scottish": ["Scottish", "sct"],
+    "Canadian": ["Canadian", "ca"], "En-canadian": ["Canadian", "ca"],
+    "Australian": ["Australian", "au"],
+    "New zealand": ["New Zealand", "nz"],
+    "Indian": ["Indian", "in"], "Hindi": ["Hindi-accented", "in"], "Tamil": ["Tamil-accented", "in"], "En-indian": ["Indian", "in"],
+    "Nigerian": ["Nigerian", "ng"], "South african": ["South African", "za"], "African": ["African", "africa"],
+    "Filipino": ["Filipino", "ph"], "En-filipino": ["Filipino", "ph"], "Singaporean": ["Singaporean", "sg"], "En-singaporean": ["Singaporean", "sg"],
+    "Malay": ["Malaysian", "my"], "Chinese": ["Chinese-accented", "cn"], "Japanese": ["Japanese-accented", "jp"], "Korean": ["Korean-accented", "kr"],
+    "Indonesian": ["Indonesian", "id"],
+    "German": ["German-accented", "de"], "Spanish": ["Spanish-accented", "es"], "French": ["French-accented", "fr"], "Russian": ["Russian-accented", "ru"],
+    "Dutch": ["Dutch-accented", "nl"], "Polish": ["Polish-accented", "pl"], "Portuguese": ["Portuguese-accented", "pt"], "Swedish": ["Swedish-accented", "se"],
+    "Croatian": ["Croatian-accented", "hr"], "Italian": ["Italian-accented", "it"], "Romanian": ["Romanian-accented", "ro"], "Ukrainian": ["Ukrainian-accented", "ua"],
+    "Danish": ["Danish-accented", "dk"], "Finnish": ["Finnish-accented", "fi"], "Czech": ["Czech-accented", "cz"], "Slovak": ["Slovak-accented", "sk"], "Greek": ["Greek-accented", "gr"],
+    "Jamaican": ["Jamaican", "jm"], "Arabic": ["Arabic-accented", "arab"], "Turkish": ["Turkish-accented", "tr"], "Unknown": ["International", "intl"]
+  },
+  "category_region": {
+    "American": "American", "Us southern": "American", "Us midwest": "American", "Us northeast": "American", "New york": "American", "Boston": "American",
+    "Chicago": "American", "African american": "American", "En-american": "American",
+    "British": "British", "Received pronunciation": "British", "Yorkshire": "British", "Geordie": "British", "Cockney": "British", "Welsh": "British", "En-british": "British",
+    "Irish": "Irish", "Scottish": "Scottish", "En-scottish": "Scottish", "Canadian": "Canadian", "En-canadian": "Canadian", "Australian": "Australian",
+    "New zealand": "NewZealand", "Indian": "Indian", "Hindi": "Indian", "Tamil": "Indian", "En-indian": "Indian",
+    "Nigerian": "African", "South african": "African", "African": "African",
+    "Filipino": "Asian", "En-filipino": "Asian", "Singaporean": "Asian", "En-singaporean": "Asian", "Malay": "Asian", "Chinese": "Asian", "Japanese": "Asian",
+    "Korean": "Asian", "Indonesian": "Asian",
+    "German": "European", "Spanish": "European", "French": "European", "Russian": "European", "Dutch": "European", "Polish": "European", "Portuguese": "European",
+    "Swedish": "European", "Croatian": "European", "Italian": "European", "Romanian": "European", "Ukrainian": "European", "Danish": "European",
+    "Finnish": "European", "Czech": "European", "Slovak": "European", "Greek": "European",
+    "Jamaican": "International", "Arabic": "International", "Turkish": "International", "Unknown": "International"
+  }
+}

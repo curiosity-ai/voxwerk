@@ -40,28 +40,29 @@ public static unsafe class Ops
     /// <summary>In-place SiLU-gated product: <c>g = silu(g) · u</c>.</summary>
     public static void SwiGlu(float* gate, float* up, long n)
     {
-        for (long i = 0; i < n; i += 1 << 20)
+        // silu(x) = x * sigmoid(x), in 4K chunks through a single stack buffer.
+        Span<float> tmp = stackalloc float[4096];
+        for (long i = 0; i < n; i += 4096)
         {
-            int len = (int)Math.Min(1 << 20, n - i);
+            int len = (int)Math.Min(4096, n - i);
             var g = new Span<float>(gate + i, len);
-            var u = new ReadOnlySpan<float>(up + i, len);
-            // silu(x) = x * sigmoid(x)
-            Span<float> tmp = len <= 8192 ? stackalloc float[len] : new float[len];
-            TensorPrimitives.Sigmoid(g, tmp);
-            TensorPrimitives.Multiply(g, tmp, g);
-            TensorPrimitives.Multiply(g, u, g);
+            var t = tmp[..len];
+            TensorPrimitives.Sigmoid(g, t);
+            TensorPrimitives.Multiply(g, t, g);
+            TensorPrimitives.Multiply(g, new ReadOnlySpan<float>(up + i, len), g);
         }
     }
 
     public static void Silu(float* x, long n)
     {
+        Span<float> tmp = stackalloc float[4096];
         for (long i = 0; i < n; i += 4096)
         {
             int len = (int)Math.Min(4096, n - i);
             var g = new Span<float>(x + i, len);
-            Span<float> tmp = stackalloc float[len];
-            TensorPrimitives.Sigmoid(g, tmp);
-            TensorPrimitives.Multiply(g, tmp, g);
+            var t = tmp[..len];
+            TensorPrimitives.Sigmoid(g, t);
+            TensorPrimitives.Multiply(g, t, g);
         }
     }
 

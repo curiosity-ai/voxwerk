@@ -3,7 +3,25 @@
     <Project Path="src/Voxwerk.Cli/Voxwerk.Cli.csproj" />
     <Project Path="src/Voxwerk/Voxwerk.csproj" />
   </Folder>
+  <Folder Name="/src/Voices/">
+    <Project Path="src/Voices/Voxwerk.Voices.English.African/Voxwerk.Voices.English.African.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.American/Voxwerk.Voices.English.American.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.Asian/Voxwerk.Voices.English.Asian.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.Australian/Voxwerk.Voices.English.Australian.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.British/Voxwerk.Voices.English.British.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.Canadian/Voxwerk.Voices.English.Canadian.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.European/Voxwerk.Voices.English.European.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.Indian/Voxwerk.Voices.English.Indian.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.International/Voxwerk.Voices.English.International.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.Irish/Voxwerk.Voices.English.Irish.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.NewZealand/Voxwerk.Voices.English.NewZealand.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.Scottish/Voxwerk.Voices.English.Scottish.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English/Voxwerk.Voices.English.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Voxwerk.Tests/Voxwerk.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Voxwerk.VoiceBuilder/Voxwerk.VoiceBuilder.csproj" />
   </Folder>
 </Solution>

@@ -85,6 +85,7 @@ public sealed class Qwen3Tts : IDisposable
     }
 
     /// <summary>Loads a model directory (as downloaded from e.g. <c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>).</summary>
+    /// <param name="modelDir">Directory with config.json, model.safetensors, tokenizer files and speech_tokenizer/.</param>
     /// <param name="threads">Worker threads for the numeric kernels; 1 = single core, ≤ 0 = all cores.</param>
     /// <param name="precision">Talker weight storage: bf16 (exact, default) or int8 (faster decode steps).</param>
     public static Qwen3Tts Load(string modelDir, int threads = 0, WeightPrecision precision = WeightPrecision.BFloat16)
@@ -103,6 +104,9 @@ public sealed class Qwen3Tts : IDisposable
     public Qwen2Tokenizer Tokenizer { get; }
     public Parallelism Parallelism { get; }
     public WeightPrecision Precision => _talker.Precision;
+
+    /// <summary>Lower-level access to prompt construction and (batched) generation.</summary>
+    public TalkerGenerator Generator => _generator;
 
     /// <summary>Accepted <c>language</c> values (dialects are selected through dialect speakers, not directly).</summary>
     public IReadOnlyCollection<string> Languages => ["auto", .. Config.LanguageIds.Keys.Where(k => !k.Contains("dialect"))];
@@ -152,6 +156,52 @@ public sealed class Qwen3Tts : IDisposable
     /// <summary>Loads a WAV reference (any rate / channel count; it is mixed down and resampled to 24 kHz).</summary>
     public VoiceClonePrompt CreateVoiceClonePrompt(string referenceWavPath, string? referenceText, bool xVectorOnly = false)
         => CreateVoiceClonePrompt(AudioFile.ReadMono(referenceWavPath, SampleRate), referenceText, xVectorOnly);
+
+    /// <summary>
+    /// Builds a voice prompt from a registered packaged voice (see <see cref="Voices.VoiceRegistry"/>): its Ogg Opus sample
+    /// is decoded to 24 kHz and cloned in ICL mode with the sample's exact transcript. The resulting prompt is cached
+    /// under <paramref name="cacheDir"/> (default <c>~/.cache/voxwerk/prompts</c>; pass "" to disable), so later uses
+    /// skip the speaker and codec encoders.
+    /// </summary>
+    public VoiceClonePrompt CreateVoiceClonePrompt(string voiceId, string? cacheDir = null)
+    {
+        Require(Qwen3TtsModelType.Base, "Voice cloning");
+        var info = Voices.VoiceRegistry.GetVoiceInfo(voiceId)
+                   ?? throw new ArgumentException($"Unknown voice '{voiceId}'. Register a voice package (e.g. EnglishVoices.RegisterAll()) or check `voxwerk voices`.", nameof(voiceId));
+        cacheDir ??= Path.Combine(ModelDownloader.DefaultCacheDir, "prompts");
+        string? cacheFile = cacheDir.Length == 0 ? null
+            : Path.Combine(cacheDir, $"{Config.TtsModelSize}-{Config.HiddenSize}", info.Id + ".vxp");
+        if (cacheFile != null && File.Exists(cacheFile))
+        {
+            try
+            {
+                using var fs = File.OpenRead(cacheFile);
+                var cached = VoiceClonePrompt.Load(fs);
+                if (cached.SpeakerEmbedding.Length == Config.HiddenSize && cached.ReferenceText == info.SampleText) return cached;
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or EndOfStreamException)
+            {
+                // Corrupt or stale cache entry: rebuild below.
+            }
+        }
+        var sample = Voices.VoiceRegistry.GetVoiceSample(info.Id) ?? throw new InvalidDataException($"Voice '{info.Id}' has no sample audio.");
+        var prompt = CreateVoiceClonePrompt(sample.Audio, info.SampleText);
+        if (cacheFile != null)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(cacheFile)!);
+                string tmp = cacheFile + "." + Environment.ProcessId + ".tmp";
+                using (var fs = File.Create(tmp)) prompt.Save(fs);
+                File.Move(tmp, cacheFile, overwrite: true);
+            }
+            catch (IOException)
+            {
+                // Caching is best effort.
+            }
+        }
+        return prompt;
+    }
 
     /// <summary>Generates codec frames [frames][16] for <paramref name="text"/> in a cloned voice.</summary>
     public int[][] GenerateCodes(string text, VoiceClonePrompt voice, string language = "auto", GenerationOptions? options = null,

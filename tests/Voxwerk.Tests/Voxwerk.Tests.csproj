@@ -19,6 +19,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- A one-voice pack (design + clone sample) for the voice registry tests. -->
+    <EmbeddedResource Include="TestVoices\voices.json" LogicalName="voices.json" />
+    <EmbeddedResource Include="TestVoices\*.opus" LogicalName="%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Voxwerk\Voxwerk.csproj" />
   </ItemGroup>
 

@@ -61,9 +61,15 @@ public sealed unsafe class TalkerGenerator
     /// [instruction] + role + codec prefix (think / language tags, optional speaker) + text, with either
     /// ICL reference codes (voice clone) or the text streamed / laid out in full.
     /// </summary>
+    /// <param name="text">Text to speak.</param>
+    /// <param name="language">Language name or "auto".</param>
     /// <param name="speakerEmbedding">x-vector of a cloned voice, or null.</param>
     /// <param name="speaker">Named CustomVoice speaker (its codec embedding becomes the speaker slot), or null.</param>
     /// <param name="instruct">Natural-language voice / style instruction, or null.</param>
+    /// <param name="referenceCodes">Reference audio codes for ICL voice cloning, or null.</param>
+    /// <param name="referenceText">Transcript of the reference audio (ICL), or null.</param>
+    /// <param name="nonStreaming">Lay the whole text out in the prompt instead of streaming it.</param>
+    /// <param name="par">Threading for the projections.</param>
     public Prompt BuildPrompt(string text, string language, float[]? speakerEmbedding, string? speaker, string? instruct,
                               int[][]? referenceCodes, string? referenceText, bool nonStreaming, Parallelism par)
     {
@@ -280,5 +286,171 @@ public sealed unsafe class TalkerGenerator
             _m.CodecHead(last, logits, par);
         }
         return frames;
+    }
+
+    /// <summary>One request for <see cref="GenerateBatch"/>.</summary>
+    public sealed record BatchJob(Prompt Prompt, GenerationOptions Options);
+
+    private sealed class Active : IDisposable
+    {
+        public required int Job;
+        public required Prompt Prompt;
+        public required GenerationOptions Options;
+        public required KvCache Cache;
+        public required KvCache CpCache;
+        public required Sampler Sampler, SubSampler;
+        public required float[] Last;     // talker hidden of the latest position
+        public required float[] Logits;
+        public readonly List<int> History = new();
+        public readonly List<int[]> Frames = new();
+        public int Step;
+
+        public void Dispose()
+        {
+            Cache.Dispose();
+            CpCache.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Generates several prompts concurrently with continuous batching: up to <paramref name="maxBatch"/> sequences
+    /// advance in lockstep, their talker / code-predictor / head projections fused into GEMMs over all active rows
+    /// (the weights are streamed once per step for the whole batch instead of once per sequence). A finished
+    /// sequence is reported through <paramref name="onDone"/> and its slot refilled from the queue. Each job keeps
+    /// its own sampler state, so results do not depend on batch composition beyond float rounding.
+    /// </summary>
+    public void GenerateBatch(IReadOnlyList<BatchJob> jobs, int maxBatch, Parallelism par, Action<int, List<int[]>> onDone,
+                              CancellationToken ct = default)
+    {
+        int H = _m.Hidden, Hc = _m.CpHidden, V = _c.VocabSize, CV = _c.CpVocabSize, G = _c.NumCodeGroups;
+        var active = new List<Active>();
+        int next = 0;
+        try
+        {
+            while (next < jobs.Count || active.Count > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                // Refill free slots (prefill runs per sequence; prompts have different lengths).
+                while (active.Count < maxBatch && next < jobs.Count)
+                {
+                    var job = jobs[next];
+                    var p = job.Prompt;
+                    var a = new Active
+                    {
+                        Job = next,
+                        Prompt = p,
+                        Options = job.Options,
+                        Cache = _m.Model.CreateCache(p.Length + job.Options.MaxNewTokens + 1),
+                        CpCache = _m.CodePredictor.CreateCache(G + 1),
+                        Sampler = new Sampler(job.Options.Seed),
+                        SubSampler = new Sampler(job.Options.Seed is int s ? s + 1 : null),
+                        Last = new float[H],
+                        Logits = new float[V],
+                    };
+                    var x = (float[])p.Prefill.Clone();
+                    var y = new float[x.Length];
+                    fixed (float* xp = x, yp = y, lp = a.Logits)
+                    {
+                        _m.Model.Forward(xp, p.Length, a.Cache, yp, par);
+                        Array.Copy(y, (p.Length - 1) * H, a.Last, 0, H);
+                        fixed (float* lastp = a.Last) _m.CodecHead(lastp, lp, par);
+                    }
+                    active.Add(a);
+                    next++;
+                }
+
+                // 1. Sample codebook 0 for every active sequence; retire finished ones.
+                var frames = new int[active.Count][];
+                var keep = new List<Active>();
+                var keepFrames = new List<int[]>();
+                for (int i = 0; i < active.Count; i++)
+                {
+                    var a = active[i];
+                    var lg = a.Logits.AsSpan();
+                    Sampler.ApplyRepetitionPenalty(lg, a.History, a.Options.RepetitionPenalty);
+                    for (int t = V - 1024; t < V; t++) if (t != _c.CodecEosId) lg[t] = float.NegativeInfinity;
+                    if (a.Step < 2) lg[_c.CodecEosId] = float.NegativeInfinity;
+                    int code0 = a.Sampler.Select(lg, a.Options.Talker);
+                    a.History.Add(code0);
+                    if (code0 == _c.CodecEosId || a.Step == a.Options.MaxNewTokens - 1)
+                    {
+                        onDone(a.Job, a.Frames);
+                        a.Dispose();
+                        continue;
+                    }
+                    var f = new int[G];
+                    f[0] = code0;
+                    keep.Add(a);
+                    keepFrames.Add(f);
+                }
+                active = keep;
+                int A = active.Count;
+                if (A == 0) continue;
+
+                // 2. Code predictor for all sequences in lockstep.
+                using var buf = new NativeBuffer<float>((long)A * (2 * H + 2 * Hc + 2 * Hc + Hc + CV + H + H + V));
+                float* cpX = buf.Ptr;                  // [2A, H]
+                float* cpIn = cpX + 2L * A * H;        // [2A, Hc]
+                float* cpY = cpIn + 2L * A * Hc;       // [2A, Hc]
+                float* gathered = cpY + 2L * A * Hc;   // [A, Hc] (allocated after cpY)
+                float* cpLogits = gathered + (long)A * Hc;  // [A, CV]
+                float* step = cpLogits + (long)A * CV;      // [A, H]
+                float* last = step + (long)A * H;           // [A, H]
+                float* logits = last + (long)A * H;         // [A, V]
+                var cpCaches = new KvCache[A];
+                var two = new int[A];
+                var one = new int[A];
+                for (int i = 0; i < A; i++)
+                {
+                    var a = active[i];
+                    a.CpCache.Length = 0;
+                    cpCaches[i] = a.CpCache;
+                    two[i] = 2;
+                    one[i] = 1;
+                    fixed (float* l = a.Last) Buffer.MemoryCopy(l, cpX + (2L * i) * H, H * 4, H * 4);
+                    _m.CodecEmbedding(keepFrames[i][0], cpX + (2L * i + 1) * H, add: false);
+                }
+                _m.ToCodePredictor(cpX, 2 * A, cpIn, par);
+                _m.CodePredictor.ForwardSegments(cpIn, cpCaches, two, cpY, par);
+                for (int i = 0; i < A; i++) Buffer.MemoryCopy(cpY + (2L * i + 1) * Hc, gathered + (long)i * Hc, Hc * 4, Hc * 4);
+                for (int g = 1; g < G; g++)
+                {
+                    _m.CodePredictorHead(g, gathered, cpLogits, par, A);
+                    for (int i = 0; i < A; i++)
+                        keepFrames[i][g] = active[i].SubSampler.Select(new Span<float>(cpLogits + (long)i * CV, CV), active[i].Options.SubTalker);
+                    if (g == G - 1) break;
+                    for (int i = 0; i < A; i++) _m.CodePredictorEmbedding(g, keepFrames[i][g], cpX + (long)i * H, add: false);
+                    _m.ToCodePredictor(cpX, A, cpIn, par);
+                    _m.CodePredictor.ForwardSegments(cpIn, cpCaches, one, gathered, par);
+                }
+
+                // 3. One talker step for all sequences.
+                var caches = new KvCache[A];
+                for (int i = 0; i < A; i++)
+                {
+                    var a = active[i];
+                    caches[i] = a.Cache;
+                    a.Frames.Add(keepFrames[i]);
+                    float* st = step + (long)i * H;
+                    _m.FrameEmbedding(keepFrames[i], st);
+                    var p = a.Prompt;
+                    float[] text = a.Step < p.TrailingLength ? p.Trailing : p.TtsPad;
+                    int off = a.Step < p.TrailingLength ? a.Step * H : 0;
+                    for (int d = 0; d < H; d++) st[d] += text[off + d];
+                    a.Step++;
+                }
+                _m.Model.ForwardSegments(step, caches, one, last, par);
+                _m.CodecHead(last, logits, par, A);
+                for (int i = 0; i < A; i++)
+                {
+                    new Span<float>(last + (long)i * H, H).CopyTo(active[i].Last);
+                    new Span<float>(logits + (long)i * V, V).CopyTo(active[i].Logits);
+                }
+            }
+        }
+        finally
+        {
+            foreach (var a in active) a.Dispose();
+        }
     }
 }
