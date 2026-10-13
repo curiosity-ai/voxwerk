@@ -48,10 +48,16 @@ select { width: 100%; background: var(--surface); border: 1px solid var(--line);
 select:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
 .ghost { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 7px 14px; cursor: pointer; flex: none; }
 .ghost:hover { border-color: var(--accent); color: var(--accent); }
+.toggle { display: inline-flex; align-items: center; gap: 6px; }
+.toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.toggle[aria-pressed="true"] svg { fill: currentColor; }
+.badge { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.badge:empty { display: none; }
 
 .count { color: var(--muted); font-size: 14px; margin: 18px 0 10px; font-variant-numeric: tabular-nums; }
 .voices { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: 12px; align-items: start; }
-.voice { display: flex; gap: 14px; align-items: flex-start; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; scroll-margin-top: 170px; }
+.voice { position: relative; display: flex; gap: 14px; align-items: flex-start; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; scroll-margin-top: 170px; }
 .voice.target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
 .play {
   flex: none; width: 46px; height: 46px; border-radius: 50%; border: 0; cursor: pointer;
@@ -63,8 +69,14 @@ select:focus-visible, button:focus-visible { outline: 3px solid var(--focus); ou
 .voice.playing .play .i-pause { display: block; }
 .voice.loading .play { opacity: .6; }
 .body { flex: 1; min-width: 0; display: grid; gap: 6px; }
-.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding-right: 30px; }
 .name { font-size: 21px; font-weight: 500; }
+.fav { position: absolute; top: 12px; right: 12px; background: none; border: 0; padding: 4px; border-radius: 6px; cursor: pointer; color: var(--muted); line-height: 0; }
+.fav svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; transition: transform .12s; }
+.fav:hover { color: var(--accent); }
+.fav:hover svg { transform: scale(1.12); }
+.fav[aria-pressed="true"] { color: var(--accent); }
+.fav[aria-pressed="true"] svg { fill: currentColor; }
 .id { background: none; border: 0; padding: 0; font-size: 12px; color: var(--muted); cursor: copy; text-align: left; overflow-wrap: anywhere; }
 .id:hover { color: var(--accent); }
 .id.copied::after { content: " copied"; color: var(--accent); }
