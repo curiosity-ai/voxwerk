@@ -320,6 +320,13 @@ The core library defines the contracts (`IVoicePack` for catalogs, `IVoiceSample
 Concentus, no native dependencies). A catalog package is an embedded `voices.json`; an audio package is a set of embedded
 `<id>.opus` resources; each also has a `Register()` call.
 
+### Voice browser
+
+`site/` is a static page that lists every voice with search, filters (region, accent, style, gender, age), its sample,
+design prompt and usage. `python scripts/build_site.py _site` assembles it from the catalog and the audio packages
+(`cd _site && python -m http.server` to preview). `.github/workflows/pages.yml` publishes it to GitHub Pages on every push
+to `main` that touches the voices or the site (set Settings → Pages → Source to "GitHub Actions" once).
+
 ### How the voices were made
 
 The catalog of English voice *descriptions* on json2video's ElevenLabs page (accent category, gender, a short blurb and a
@@ -351,6 +358,6 @@ version `yy.M.<buildId>`, publishes the `.nupkg` files as a build artifact and, 
 the service connection named by the `nugetServiceConnection` variable (an external NuGet feed connection holding the
 API key).
 
-## Model license
+## License
 
-The Qwen3-TTS weights (downloaded separately from Hugging Face) are released by the Qwen team under Apache-2.0.
+Voxwerk is released under the [MIT license](LICENSE). The Qwen3-TTS weights (downloaded separately from Hugging Face) are released by the Qwen team under Apache-2.0.
