@@ -18,12 +18,32 @@ public sealed record SynthesisResult(float[] Audio, int SampleRate, int[][] Code
     public double RealTimeFactor => AudioSeconds > 0 ? TotalTime.TotalSeconds / AudioSeconds : double.NaN;
 }
 
+/// <summary>The three Qwen3-TTS checkpoint families.</summary>
+public enum Qwen3TtsModelType
+{
+    /// <summary><c>*-Base</c>: clones a voice from reference audio (<see cref="Qwen3Tts.Synthesize"/>).</summary>
+    Base,
+
+    /// <summary><c>*-VoiceDesign</c>: creates a voice from a natural-language description (<see cref="Qwen3Tts.SynthesizeVoiceDesign"/>).</summary>
+    VoiceDesign,
+
+    /// <summary><c>*-CustomVoice</c>: built-in named speakers, optionally steered by an instruction (<see cref="Qwen3Tts.SynthesizeCustomVoice"/>).</summary>
+    CustomVoice,
+}
+
 /// <summary>
-/// Qwen3-TTS 12 Hz 0.6B Base (voice cloning text-to-speech) in pure C#.
+/// Qwen3-TTS (12 Hz tokenizer; 0.6B / 1.7B; Base, VoiceDesign and CustomVoice checkpoints) in pure C#.
 /// <code>
+/// // Voice cloning (Qwen/Qwen3-TTS-12Hz-0.6B-Base or 1.7B-Base)
 /// using var tts = Qwen3Tts.Load(modelDir);
 /// var voice = tts.CreateVoiceClonePrompt("ref.wav", "Transcript of ref.wav");
 /// var result = tts.Synthesize("Hello world!", voice, "English");
+///
+/// // Voice design (Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign)
+/// var designed = tts.SynthesizeVoiceDesign("Hello world!", "A warm, low female voice, speaking slowly.");
+///
+/// // Built-in speakers (Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice or 1.7B-CustomVoice)
+/// var custom = tts.SynthesizeCustomVoice("Hello world!", speaker: "ryan");
 /// AudioFile.WriteWav("out.wav", result.Audio);
 /// </code>
 /// </summary>
@@ -33,8 +53,8 @@ public sealed class Qwen3Tts : IDisposable
 
     private readonly TalkerModel _talker;
     private readonly TalkerGenerator _generator;
-    private readonly SpeakerEncoder _speaker;
-    private readonly SpeechEncoder _encoder;
+    private readonly SpeakerEncoder? _speaker;
+    private readonly SpeechEncoder? _encoder;
     private readonly SpeechDecoder _decoder;
     private readonly MelSpectrogram _mel = new();
 
@@ -42,23 +62,29 @@ public sealed class Qwen3Tts : IDisposable
     {
         Parallelism = par;
         Config = Qwen3TtsConfig.Load(Path.Combine(dir, "config.json"));
-        if (!Config.TtsModelType.Equals("base", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException($"Only the Base (voice clone) model type is supported, got '{Config.TtsModelType}'.");
+        ModelType = Config.TtsModelType.ToLowerInvariant() switch
+        {
+            "base" => Qwen3TtsModelType.Base,
+            "voice_design" => Qwen3TtsModelType.VoiceDesign,
+            "custom_voice" => Qwen3TtsModelType.CustomVoice,
+            var t => throw new NotSupportedException($"Unknown tts_model_type '{t}'."),
+        };
         Tokenizer = Qwen2Tokenizer.FromDirectory(dir);
         using (var st = new SafeTensorsFile(Path.Combine(dir, "model.safetensors")))
         {
             _talker = new TalkerModel(st, Config, precision);
-            _speaker = new SpeakerEncoder(st);
+            if (ModelType == Qwen3TtsModelType.Base) _speaker = new SpeakerEncoder(st);
         }
         using (var st = new SafeTensorsFile(Path.Combine(dir, "speech_tokenizer", "model.safetensors")))
         {
-            _encoder = new SpeechEncoder(st);
+            // The codec encoder is only needed to turn reference audio into codes (voice cloning).
+            if (ModelType == Qwen3TtsModelType.Base) _encoder = new SpeechEncoder(st);
             _decoder = new SpeechDecoder(st);
         }
         _generator = new TalkerGenerator(_talker, Tokenizer);
     }
 
-    /// <summary>Loads a model directory (as downloaded from <c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>).</summary>
+    /// <summary>Loads a model directory (as downloaded from e.g. <c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>).</summary>
     /// <param name="threads">Worker threads for the numeric kernels; 1 = single core, ≤ 0 = all cores.</param>
     /// <param name="precision">Talker weight storage: bf16 (exact, default) or int8 (faster decode steps).</param>
     public static Qwen3Tts Load(string modelDir, int threads = 0, WeightPrecision precision = WeightPrecision.BFloat16)
@@ -73,22 +99,52 @@ public sealed class Qwen3Tts : IDisposable
     }
 
     public Qwen3TtsConfig Config { get; }
+    public Qwen3TtsModelType ModelType { get; }
     public Qwen2Tokenizer Tokenizer { get; }
     public Parallelism Parallelism { get; }
     public WeightPrecision Precision => _talker.Precision;
-    public IReadOnlyCollection<string> Languages => ["auto", .. Config.LanguageIds.Keys];
+
+    /// <summary>Accepted <c>language</c> values (dialects are selected through dialect speakers, not directly).</summary>
+    public IReadOnlyCollection<string> Languages => ["auto", .. Config.LanguageIds.Keys.Where(k => !k.Contains("dialect"))];
+
+    /// <summary>Built-in speakers of a CustomVoice model (empty otherwise).</summary>
+    public IReadOnlyCollection<string> Speakers => Config.SpeakerIds.Keys.ToArray();
+
+    /// <summary>Whether <see cref="SynthesizeCustomVoice"/> honours an instruction. The reference implementation
+    /// ignores instructions for the 0.6B CustomVoice checkpoint, and so does this one.</summary>
+    public bool SupportsInstruct => ModelType == Qwen3TtsModelType.VoiceDesign ||
+                                    (ModelType == Qwen3TtsModelType.CustomVoice && !Config.TtsModelSize.Equals("0b6", StringComparison.OrdinalIgnoreCase));
+
+    private void Require(Qwen3TtsModelType type, string what)
+    {
+        if (ModelType != type)
+            throw new NotSupportedException($"{what} needs a {type} checkpoint (e.g. {ExampleRepo(type)}); the loaded model is {ModelType} ({Config.TtsModelSize}).");
+    }
+
+    /// <summary>A Hugging Face repository providing the given model type.</summary>
+    public static string ExampleRepo(Qwen3TtsModelType type) => type switch
+    {
+        Qwen3TtsModelType.VoiceDesign => "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        Qwen3TtsModelType.CustomVoice => "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+        _ => ModelDownloader.DefaultRepo,
+    };
+
+    // ------------------------------------------------------------------------------------------
+    // Voice cloning (Base)
+    // ------------------------------------------------------------------------------------------
 
     /// <summary>Builds a voice prompt from 24 kHz mono reference audio. Pass the transcript for ICL mode
     /// (best similarity); with <paramref name="xVectorOnly"/> (or no transcript) only the speaker embedding is used.</summary>
     public VoiceClonePrompt CreateVoiceClonePrompt(float[] referenceAudio24k, string? referenceText, bool xVectorOnly = false)
     {
+        Require(Qwen3TtsModelType.Base, "Voice cloning");
         var mel = _mel.Compute(referenceAudio24k, out int frames);
-        var spk = _speaker.Forward(mel, frames, Parallelism);
+        var spk = _speaker!.Forward(mel, frames, Parallelism);
         bool icl = !xVectorOnly && !string.IsNullOrWhiteSpace(referenceText);
         return new VoiceClonePrompt
         {
             SpeakerEmbedding = spk,
-            ReferenceCodes = icl ? _encoder.Encode(referenceAudio24k, Parallelism) : null,
+            ReferenceCodes = icl ? _encoder!.Encode(referenceAudio24k, Parallelism) : null,
             ReferenceText = icl ? referenceText : null,
         };
     }
@@ -97,13 +153,52 @@ public sealed class Qwen3Tts : IDisposable
     public VoiceClonePrompt CreateVoiceClonePrompt(string referenceWavPath, string? referenceText, bool xVectorOnly = false)
         => CreateVoiceClonePrompt(AudioFile.ReadMono(referenceWavPath, SampleRate), referenceText, xVectorOnly);
 
-    /// <summary>Generates codec frames [frames][16] for <paramref name="text"/>.</summary>
+    /// <summary>Generates codec frames [frames][16] for <paramref name="text"/> in a cloned voice.</summary>
     public int[][] GenerateCodes(string text, VoiceClonePrompt voice, string language = "auto", GenerationOptions? options = null,
                                  CancellationToken ct = default, Action<int>? onFrame = null)
     {
+        Require(Qwen3TtsModelType.Base, "Voice cloning");
         options ??= new GenerationOptions();
-        var prompt = _generator.BuildPrompt(text, language, voice, options.NonStreamingMode, Parallelism);
+        var prompt = _generator.BuildPrompt(text, language, voice, options.NonStreamingMode ?? false, Parallelism);
         return _generator.Generate(prompt, options, Parallelism, ct, onFrame).ToArray();
+    }
+
+    /// <summary>Text → speech in a voice cloned from reference audio (Base models).</summary>
+    public SynthesisResult Synthesize(string text, VoiceClonePrompt voice, string language = "auto", GenerationOptions? options = null,
+                                      CancellationToken ct = default, Action<int>? onFrame = null)
+    {
+        Require(Qwen3TtsModelType.Base, "Voice cloning");
+        options ??= new GenerationOptions();
+        return Run(() => _generator.BuildPrompt(text, language, voice, options.NonStreamingMode ?? false, Parallelism),
+                   voice.XVectorOnly ? null : voice.ReferenceCodes, options, ct, onFrame);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Voice design (VoiceDesign) and built-in speakers (CustomVoice)
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>Text → speech in a voice created from a natural-language <paramref name="voiceDescription"/>
+    /// (timbre, age, gender, emotion, pace, ...). VoiceDesign models only.</summary>
+    public SynthesisResult SynthesizeVoiceDesign(string text, string voiceDescription, string language = "auto", GenerationOptions? options = null,
+                                                 CancellationToken ct = default, Action<int>? onFrame = null)
+    {
+        Require(Qwen3TtsModelType.VoiceDesign, "Voice design");
+        options ??= new GenerationOptions();
+        return Run(() => _generator.BuildPrompt(text, language, null, null, voiceDescription, null, null, options.NonStreamingMode ?? true, Parallelism),
+                   null, options, ct, onFrame);
+    }
+
+    /// <summary>Text → speech with a built-in <paramref name="speaker"/> (see <see cref="Speakers"/>), optionally
+    /// steered by an <paramref name="instruct"/>ion such as "Speak in a whisper" (1.7B only, see
+    /// <see cref="SupportsInstruct"/>). CustomVoice models only.</summary>
+    public SynthesisResult SynthesizeCustomVoice(string text, string speaker, string language = "auto", string? instruct = null,
+                                                 GenerationOptions? options = null, CancellationToken ct = default, Action<int>? onFrame = null)
+    {
+        Require(Qwen3TtsModelType.CustomVoice, "Built-in speakers");
+        options ??= new GenerationOptions();
+        string? ins = SupportsInstruct ? instruct : null;
+        return Run(() => _generator.BuildPrompt(text, language, null, speaker, ins, null, null, options.NonStreamingMode ?? true, Parallelism),
+                   null, options, ct, onFrame);
     }
 
     /// <summary>Decodes codec frames to 24 kHz audio. When <paramref name="context"/> (reference codes) is given it is
@@ -119,19 +214,17 @@ public sealed class Qwen3Tts : IDisposable
         return wav[cut..];
     }
 
-    /// <summary>Text → speech in the cloned voice.</summary>
-    public SynthesisResult Synthesize(string text, VoiceClonePrompt voice, string language = "auto", GenerationOptions? options = null,
-                                      CancellationToken ct = default, Action<int>? onFrame = null)
+    private SynthesisResult Run(Func<TalkerGenerator.Prompt> buildPrompt, int[][]? context, GenerationOptions options,
+                                CancellationToken ct, Action<int>? onFrame)
     {
-        options ??= new GenerationOptions();
         var sw = Stopwatch.StartNew();
-        var prompt = _generator.BuildPrompt(text, language, voice, options.NonStreamingMode, Parallelism);
+        var prompt = buildPrompt();
         var tPrompt = sw.Elapsed;
         sw.Restart();
         var codes = _generator.Generate(prompt, options, Parallelism, ct, onFrame).ToArray();
         var tTalker = sw.Elapsed;
         sw.Restart();
-        var audio = codes.Length == 0 ? [] : Decode(codes, voice.ReferenceCodes, ct);
+        var audio = codes.Length == 0 ? [] : Decode(codes, context, ct);
         var tDecode = sw.Elapsed;
         return new SynthesisResult(audio, SampleRate, codes, tPrompt, tTalker, tDecode);
     }
@@ -139,8 +232,8 @@ public sealed class Qwen3Tts : IDisposable
     public void Dispose()
     {
         _talker.Dispose();
-        _speaker.Dispose();
-        _encoder.Dispose();
+        _speaker?.Dispose();
+        _encoder?.Dispose();
         _decoder.Dispose();
     }
 }

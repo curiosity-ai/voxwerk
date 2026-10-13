@@ -17,13 +17,13 @@ public sealed unsafe class TalkerModel : IDisposable
     private readonly PackedMatrix _codecHead;
     private readonly NativeBuffer<ushort>[] _cpEmbedding;   // 15 × [cpVocab, hidden] bf16
     private readonly PackedMatrix[] _cpHead;                // 15 × (cpHidden → cpVocab)
+    private readonly PackedMatrix? _toCp;                   // small_to_mtp_projection (hidden → cpHidden), 1.7B models
+    private readonly float[]? _toCpBias;
 
     public TalkerModel(SafeTensorsFile st, Qwen3TtsConfig cfg, WeightPrecision precision = WeightPrecision.BFloat16)
     {
         Config = cfg;
         Precision = precision;
-        if (cfg.CpHiddenSize != cfg.HiddenSize)
-            throw new NotSupportedException("small_to_mtp_projection (code predictor width != talker width) is not implemented.");
         _textEmbedding = st.ReadBf16("talker.model.text_embedding.weight");
         using (var w1 = st.ReadBf16("talker.text_projection.linear_fc1.weight"))
         using (var w2 = st.ReadBf16("talker.text_projection.linear_fc2.weight"))
@@ -39,6 +39,12 @@ public sealed unsafe class TalkerModel : IDisposable
             cfg.NumKvHeads, cfg.HeadDim, cfg.RmsNormEps, cfg.RopeTheta, precision);
         CodePredictor = new DecoderStack(st, "talker.code_predictor.model", cfg.CpNumLayers, cfg.CpHiddenSize, cfg.CpIntermediateSize,
             cfg.CpNumHeads, cfg.CpNumKvHeads, cfg.CpHeadDim, cfg.RmsNormEps, cfg.CpRopeTheta, precision);
+        if (cfg.CpHiddenSize != cfg.HiddenSize)
+        {
+            using var w = st.ReadBf16("talker.code_predictor.small_to_mtp_projection.weight");
+            _toCp = DecoderStack.Pack(precision, cfg.HiddenSize, w);
+            _toCpBias = st.ReadFloat("talker.code_predictor.small_to_mtp_projection.bias");
+        }
         int groups = cfg.NumCodeGroups - 1;
         _cpEmbedding = new NativeBuffer<ushort>[groups];
         _cpHead = new PackedMatrix[groups];
@@ -55,6 +61,18 @@ public sealed unsafe class TalkerModel : IDisposable
     public DecoderStack Model { get; }
     public DecoderStack CodePredictor { get; }
     public int Hidden => Config.HiddenSize;
+    public int CpHidden => Config.CpHiddenSize;
+
+    /// <summary>Maps talker-width rows to code-predictor width (<c>small_to_mtp_projection</c>; identity when equal).</summary>
+    public void ToCodePredictor(float* x, int rows, float* y, Parallelism par)
+    {
+        if (_toCp == null)
+        {
+            Buffer.MemoryCopy(x, y, (long)rows * Hidden * 4, (long)rows * Hidden * 4);
+            return;
+        }
+        fixed (float* b = _toCpBias) Gemm.Multiply(x, Hidden, rows, _toCp, y, CpHidden, par, b);
+    }
 
     /// <summary><c>text_projection(text_embedding(ids))</c> → [ids.Length, hidden].</summary>
     public float[] ProjectText(ReadOnlySpan<int> ids, Parallelism par)
@@ -116,7 +134,7 @@ public sealed unsafe class TalkerModel : IDisposable
 
     /// <summary>Code predictor head for codebook <paramref name="group"/> (1..15).</summary>
     public void CodePredictorHead(int group, float* hidden, float* logits, Parallelism par)
-        => Gemm.Multiply(hidden, Hidden, 1, _cpHead[group - 1], logits, Config.CpVocabSize, par);
+        => Gemm.Multiply(hidden, CpHidden, 1, _cpHead[group - 1], logits, Config.CpVocabSize, par);
 
     public void Dispose()
     {
@@ -129,5 +147,6 @@ public sealed unsafe class TalkerModel : IDisposable
         CodePredictor.Dispose();
         foreach (var e in _cpEmbedding) e.Dispose();
         foreach (var h in _cpHead) h.Dispose();
+        _toCp?.Dispose();
     }
 }
