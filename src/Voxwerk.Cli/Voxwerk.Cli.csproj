@@ -5,12 +5,19 @@
     <AssemblyName>Voxwerk.Cli</AssemblyName>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>voxwerk</ToolCommandName>
+    <PackageId>Voxwerk.Cli</PackageId>
+    <Description>voxwerk: command-line text-to-speech with Qwen3-TTS (voice cloning, voice design, built-in speakers and a catalog of ready-made voices), as a .NET tool. Install with: dotnet tool install -g Voxwerk.Cli</Description>
     <RootNamespace>Voxwerk.Cli</RootNamespace>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <!-- One-shot, compute-bound process: compile everything fully optimized up front. -->
     <TieredCompilation>false</TieredCompilation>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Voxwerk\Voxwerk.csproj" />

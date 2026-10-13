@@ -17,6 +17,14 @@ text-to-speech models, as a library plus a command-line tool. All three voice mo
 
 ## Quick start
 
+Install the command-line tool from NuGet (or run it from source with `dotnet run -c Release --project src/Voxwerk.Cli --`):
+
+```bash
+dotnet tool install -g Voxwerk.Cli
+voxwerk voices --search "warm narration"
+voxwerk design --voice-id <id> --text "Hello there!" --out hello.wav
+```
+
 ```bash
 # Synthesize in a cloned voice (the checkpoint is downloaded to ~/.cache/voxwerk on first use)
 dotnet run -c Release --project src/Voxwerk.Cli -- synth \
@@ -330,6 +338,18 @@ dotnet build -c Release
 
 Requires the .NET 10 SDK. AVX-512 and AVX2+FMA are used when available; other CPUs fall back to portable
 (slower) code paths.
+
+### Packages and publishing
+
+`dotnet pack Voxwerk.slnx -c Release -o packages` produces every NuGet package: `Voxwerk` (library), `Voxwerk.Cli`
+(the `voxwerk` .NET tool), `Voxwerk.Voices.English` (voice catalog), the optional `Voxwerk.Voices.English.*` audio
+packages and the `Voxwerk.Voices.English.Samples` meta package. Project references become package dependencies at the
+same version, so one version is stamped across all of them.
+
+`.devops/azure-pipelines.yml` is the Azure DevOps pipeline. It restores, builds, tests and packs everything with a CalVer
+version `yy.M.<buildId>`, publishes the `.nupkg` files as a build artifact and, on `main`, pushes them to NuGet through
+the service connection named by the `nugetServiceConnection` variable (an external NuGet feed connection holding the
+API key).
 
 ## Model license
 
