@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Voxwerk.Cli</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>voxwerk</ToolCommandName>
+    <RootNamespace>Voxwerk.Cli</RootNamespace>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <!-- One-shot, compute-bound process: compile everything fully optimized up front. -->
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Voxwerk\Voxwerk.csproj" />
+  </ItemGroup>
+
+</Project>

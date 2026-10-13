@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Voxwerk.Cli/Voxwerk.Cli.csproj" />
+    <Project Path="src/Voxwerk/Voxwerk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Voxwerk.Tests/Voxwerk.Tests.csproj" />
+  </Folder>
+</Solution>
