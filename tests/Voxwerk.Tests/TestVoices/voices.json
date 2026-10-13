@@ -17,7 +17,7 @@
     ],
     "sample_text": "Hi, I'm Amber. I bring a warm Southern welcome to every story. Pull up a chair, because this recipe is worth the wait.",
     "sample_seconds": 9.12,
-    "clone_text": "Every voice in this collection reads this same sentence, so you can compare how each one sounds side by side.",
-    "clone_seconds": 6.56
+    "design_prompt": "A middle-aged Southern American woman with a warm, gentle drawl, speaking in a relaxed and friendly way.",
+    "sample_package": "Voxwerk.Tests.TestVoices"
   }
 ]

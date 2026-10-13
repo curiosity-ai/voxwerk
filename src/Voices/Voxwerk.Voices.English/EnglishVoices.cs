@@ -1,31 +1,19 @@
+using Voxwerk.Voices;
+
 namespace Voxwerk.Voices.English;
 
-/// <summary>Registers every English voice package.</summary>
+/// <summary>The English voice catalog: metadata of every English voice (no audio).</summary>
+/// <remarks>Every voice can be spoken with the VoiceDesign model from its <see cref="VoiceInfo.DesignPrompt"/>. To clone a
+/// voice with the Base model, add the audio package named by <see cref="VoiceInfo.SamplePackage"/> (or
+/// <c>Voxwerk.Voices.English.Samples</c> for all of them) and call its <c>Register()</c>.</remarks>
 public static class EnglishVoices
 {
-    /// <summary>Registers all English regional voice packs with <see cref="VoiceRegistry"/> (idempotent).</summary>
-    public static void RegisterAll()
-    {
-        Voxwerk.Voices.English.American.Characters.EnglishAmericanCharactersVoices.Register();
-        Voxwerk.Voices.English.American.Commercial.EnglishAmericanCommercialVoices.Register();
-        Voxwerk.Voices.English.American.Conversational.Female.EnglishAmericanConversationalFemaleVoices.Register();
-        Voxwerk.Voices.English.American.Conversational.Male.EnglishAmericanConversationalMaleVoices.Register();
-        Voxwerk.Voices.English.American.Narration.Female.EnglishAmericanNarrationFemaleVoices.Register();
-        Voxwerk.Voices.English.American.Narration.Male.EnglishAmericanNarrationMaleVoices.Register();
-        Voxwerk.Voices.English.American.Regional.EnglishAmericanRegionalVoices.Register();
-        Voxwerk.Voices.English.British.Characters.EnglishBritishCharactersVoices.Register();
-        Voxwerk.Voices.English.British.Commercial.EnglishBritishCommercialVoices.Register();
-        Voxwerk.Voices.English.British.Conversational.EnglishBritishConversationalVoices.Register();
-        Voxwerk.Voices.English.British.Narration.EnglishBritishNarrationVoices.Register();
-        Voxwerk.Voices.English.Irish.EnglishIrishVoices.Register();
-        Voxwerk.Voices.English.Scottish.EnglishScottishVoices.Register();
-        Voxwerk.Voices.English.Canadian.EnglishCanadianVoices.Register();
-        Voxwerk.Voices.English.Australian.EnglishAustralianVoices.Register();
-        Voxwerk.Voices.English.NewZealand.EnglishNewZealandVoices.Register();
-        Voxwerk.Voices.English.Indian.EnglishIndianVoices.Register();
-        Voxwerk.Voices.English.African.EnglishAfricanVoices.Register();
-        Voxwerk.Voices.English.Asian.EnglishAsianVoices.Register();
-        Voxwerk.Voices.English.European.EnglishEuropeanVoices.Register();
-        Voxwerk.Voices.English.International.EnglishInternationalVoices.Register();
-    }
+    /// <summary>NuGet package / pack name.</summary>
+    public const string PackageName = "Voxwerk.Voices.English";
+
+    /// <summary>The catalog (embedded <c>voices.json</c>).</summary>
+    public static IVoicePack Pack { get; } = new EmbeddedVoicePack(typeof(EnglishVoices).Assembly, PackageName);
+
+    /// <summary>Registers the English voice catalog with <see cref="VoiceRegistry"/> (idempotent).</summary>
+    public static void Register() => VoiceRegistry.Register(Pack);
 }

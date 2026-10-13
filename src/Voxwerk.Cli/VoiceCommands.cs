@@ -25,8 +25,8 @@ internal static class VoiceCommands
         }
         foreach (var v in voices.Take(limit))
             Console.WriteLine($"{v.Id,-34} {v.Gender,-7} {v.Age,-12} {v.Category,-24} {v.Style,-15} {Trim(v.Description, 60)}");
-        Console.Error.WriteLine($"{voices.Count} voice(s){(voices.Count > limit ? $", showing {limit}" : "")}. Packages: " +
-                                string.Join(", ", voices.GroupBy(v => v.Package.Replace("Voxwerk.Voices.English.", "")).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}")));
+        Console.Error.WriteLine($"{voices.Count} voice(s){(voices.Count > limit ? $", showing {limit}" : "")}. Audio packages: " +
+                                string.Join(", ", voices.GroupBy(v => v.SamplePackage.Replace("Voxwerk.Voices.English.", "")).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}")));
         return 0;
     }
 
@@ -42,32 +42,25 @@ internal static class VoiceCommands
         Console.WriteLine($"Gender/age:  {v.Gender}, {v.Age}");
         Console.WriteLine($"Tags:        {string.Join(", ", v.Tags)}");
         Console.WriteLine($"Description: {v.Description}");
-        Console.WriteLine($"Sample:      \"{v.SampleText}\" ({v.SampleSeconds:F1}s, generated from the description)");
-        if (v.CloneSeconds > 0) Console.WriteLine($"Clone:       \"{v.CloneText}\" ({v.CloneSeconds:F1}s, re-created by voice cloning; --kind clone)");
+        Console.WriteLine($"Design:      {v.DesignPrompt}");
+        Console.WriteLine($"Sample:      \"{v.SampleText}\" ({v.SampleSeconds:F1}s)");
         Console.WriteLine($"Package:     {v.Package}");
+        Console.WriteLine($"Audio:       {v.SamplePackage} ({(VoiceRegistry.HasSample(v.Id) ? "installed: synth clones the sample" : "not installed: synth uses the design prompt")})");
         return 0;
     }
-
-    private static VoiceSampleKind Kind(Dictionary<string, string?> o) => (Cli.Get(o, "kind") ?? "design").ToLowerInvariant() switch
-    {
-        "design" or "description" => VoiceSampleKind.Design,
-        "clone" or "cloned" => VoiceSampleKind.Clone,
-        var k => throw new ArgumentException($"Unknown --kind '{k}' (use design or clone)."),
-    };
 
     public static int Sample(string? id, Dictionary<string, string?> o)
     {
         var v = Resolve(id);
-        var kind = Kind(o);
-        string outPath = Cli.Get(o, "out") ?? (kind == VoiceSampleKind.Clone ? v.Id + ".clone.opus" : v.Id + ".opus");
+        string outPath = Cli.Get(o, "out") ?? v.Id + ".opus";
         if (outPath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
         {
-            var sample = VoiceRegistry.GetVoiceSample(v.Id, kind) ?? throw new InvalidDataException($"Voice '{v.Id}' has no {kind} sample.");
+            var sample = VoiceRegistry.GetVoiceSample(v.Id) ?? throw NoSample(v);
             AudioFile.WriteWav(outPath, sample.Audio, sample.SampleRate);
         }
         else
         {
-            using var s = VoiceRegistry.OpenSampleStream(v.Id, kind) ?? throw new InvalidDataException($"Voice '{v.Id}' has no {kind} sample.");
+            using var s = VoiceRegistry.OpenSampleStream(v.Id) ?? throw NoSample(v);
             using var f = File.Create(outPath);
             s.CopyTo(f);
         }
@@ -78,10 +71,10 @@ internal static class VoiceCommands
     public static int Play(string? id, Dictionary<string, string?> o)
     {
         var v = Resolve(id);
-        var sample = VoiceRegistry.GetVoiceSample(v.Id, Kind(o)) ?? throw new InvalidDataException($"Voice '{v.Id}' has no {Kind(o)} sample.");
+        var sample = VoiceRegistry.GetVoiceSample(v.Id) ?? throw NoSample(v);
         string tmp = Path.Combine(Path.GetTempPath(), $"voxwerk-{v.Id}-{Environment.ProcessId}.wav");
         AudioFile.WriteWav(tmp, sample.Audio, sample.SampleRate);
-        Console.Error.WriteLine($"{v.Name} ({v.Id}, {sample.Kind}): \"{sample.Text}\"");
+        Console.Error.WriteLine($"{v.Name} ({v.Id}): \"{sample.Text}\"");
         try
         {
             if (OperatingSystem.IsWindows())
@@ -120,6 +113,9 @@ internal static class VoiceCommands
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("A voice id is required (see `voxwerk voices`).");
         return VoiceRegistry.GetVoiceInfo(id) ?? throw new ArgumentException($"Unknown voice '{id}'. List voices with `voxwerk voices --search ...`.");
     }
+
+    private static InvalidDataException NoSample(VoiceInfo v)
+        => new($"The sample of voice '{v.Id}' is not installed (package {v.SamplePackage}).");
 
     private static string Trim(string s, int n) => s.Length <= n ? s : s[..(n - 1)] + "…";
 

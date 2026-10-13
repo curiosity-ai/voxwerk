@@ -4,7 +4,8 @@ Usage: python run_pipeline.py --work /tmp/voxwerk-build/work --design-model <1.7
                               --base-model <0.6B-Base dir> --python <python with qwen-tts> [--batch 24] [--threads 4]
 
 Each round: assemble spec from rewritten metadata -> VoiceDesign generation -> decode -> QA -> retry failures with new
-seeds (up to 3 attempts) -> Base-model cloning of passing voices -> decode -> QA -> pack into src/Voices.
+seeds (up to 3 attempts) -> pack into src/Voices (metadata into Voxwerk.Voices.English, reference samples into the
+optional audio packages). `voicebuilder clone` can additionally render cloned comparison takes; they are not packaged.
 """
 import argparse, json, os, subprocess, sys, time
 
@@ -58,28 +59,6 @@ for attempt in range(1, a.max_attempts):
     open(ids, "w").write("\n".join(failed))
     run(builder + ["generate", "--model", a.design_model, "--only", ids, "--seed-offset", str(1000 * attempt)] + common)
     run(builder + ["decode", "--model", a.design_model, "--work", work, "--threads", a.threads])
-    results = qa()
-
-# Clone the passing designs (QA rejects are excluded by removing their wavs from the clone input list).
-passing = [k for k, v in results.items() if v["pass"] and not k.endswith(".clone")]
-ids = os.path.join(work, "clone_ids.txt")
-open(ids, "w").write("\n".join(passing))
-run(builder + ["clone", "--model", a.base_model, "--only", ids] + common)
-run(builder + ["decode", "--model", a.base_model, "--work", work, "--threads", a.threads])
-results = qa()
-# A clone that fails QA gets one more try with another seed.
-failed = [k[:-6] for k, v in results.items() if not v["pass"] and k.endswith(".clone") and attempts.get(k, 0) < 1]
-if failed:
-    for vid in failed:
-        attempts[vid + ".clone"] = 1
-        for p in (os.path.join(work, "codes", vid + ".clone.codes"), os.path.join(work, "wav", vid + ".clone.wav")):
-            if os.path.exists(p): os.remove(p)
-        results.pop(vid + ".clone", None)
-    json.dump(results, open(os.path.join(work, "qa.json"), "w"), indent=1)
-    json.dump(attempts, open(attempts_path, "w"), indent=1)
-    open(ids, "w").write("\n".join(failed))
-    run(builder + ["clone", "--model", a.base_model, "--only", ids, "--seed-offset", "500"] + common)
-    run(builder + ["decode", "--model", a.base_model, "--work", work, "--threads", a.threads])
     results = qa()
 
 run(builder + ["pack", "--spec", spec, "--work", work, "--qa", os.path.join(work, "qa.json"), "--out", os.path.join(repo, "src/Voices")])

@@ -1,16 +1,20 @@
 using System.Collections.Concurrent;
+using Voxwerk.Audio;
 
 namespace Voxwerk.Voices;
 
 /// <summary>
-/// Global registry of available voices. Voice packages register themselves, e.g.
-/// <c>Voxwerk.Voices.English.EnglishVoices.RegisterAll()</c> or <c>EnglishBritishNarrationVoices.Register()</c>;
-/// voices are then looked up by id (<c>en-us-marigold-vale</c>) or searched.
+/// Global registry of available voices. A language package registers its catalog (metadata of every voice, enough to
+/// speak with the VoiceDesign model), e.g. <c>Voxwerk.Voices.English.EnglishVoices.Register()</c>; optional audio packages
+/// add the reference samples needed to clone voices, e.g. <c>EnglishBritishNarrationVoices.Register()</c>. Voices are
+/// then looked up by id (<c>en-us-marigold-vale</c>) or searched.
 /// </summary>
 public static class VoiceRegistry
 {
     private static readonly ConcurrentDictionary<string, IVoicePack> Packs = new(StringComparer.OrdinalIgnoreCase);
     private static readonly ConcurrentDictionary<string, IVoicePack> ById = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, IVoiceSamplePack> SamplePacks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, IVoiceSamplePack> SamplesById = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Registers a pack (idempotent). Voice ids already registered by another pack are rejected.</summary>
     public static void Register(IVoicePack pack)
@@ -24,6 +28,17 @@ public static class VoiceRegistry
         }
     }
 
+    /// <summary>Registers reference samples (idempotent). The first registered pack wins for a voice id.</summary>
+    public static void Register(IVoiceSamplePack samples)
+    {
+        ArgumentNullException.ThrowIfNull(samples);
+        if (!SamplePacks.TryAdd(samples.Name, samples)) return;
+        foreach (var id in samples.VoiceIds) SamplesById.TryAdd(id, samples);
+    }
+
+    /// <summary>Registered sample packs.</summary>
+    public static IReadOnlyCollection<IVoiceSamplePack> RegisteredSamplePacks => SamplePacks.Values.OrderBy(p => p.Name, StringComparer.Ordinal).ToArray();
+
     /// <summary>Registered packs.</summary>
     public static IReadOnlyCollection<IVoicePack> RegisteredPacks => Packs.Values.OrderBy(p => p.Name, StringComparer.Ordinal).ToArray();
 
@@ -35,13 +50,20 @@ public static class VoiceRegistry
     /// <summary>Voice metadata by id, or null when no registered pack provides it.</summary>
     public static VoiceInfo? GetVoiceInfo(string id) => ById.TryGetValue(id, out var p) ? p.GetVoiceInfo(id) : null;
 
-    /// <summary>Decoded 24 kHz sample by id, or null.</summary>
-    public static VoiceSample? GetVoiceSample(string id, VoiceSampleKind kind = VoiceSampleKind.Design)
-        => ById.TryGetValue(id, out var p) ? p.GetVoiceSample(id, kind) : null;
+    /// <summary>True when a registered sample pack has the reference sample of the voice (so it can be cloned).</summary>
+    public static bool HasSample(string id) => SamplesById.ContainsKey(id);
 
-    /// <summary>Encoded (Ogg Opus) sample by id, or null.</summary>
-    public static Stream? OpenSampleStream(string id, VoiceSampleKind kind = VoiceSampleKind.Design)
-        => ById.TryGetValue(id, out var p) ? p.OpenSampleStream(id, kind) : null;
+    /// <summary>Encoded (Ogg Opus) reference sample by id, or null when no sample pack for it is registered.</summary>
+    public static Stream? OpenSampleStream(string id) => SamplesById.TryGetValue(id, out var p) ? p.OpenSampleStream(id) : null;
+
+    /// <summary>Decoded 24 kHz reference sample by id, or null when the voice or its sample is not registered.</summary>
+    public static VoiceSample? GetVoiceSample(string id)
+    {
+        var info = GetVoiceInfo(id);
+        if (info == null) return null;
+        using var s = OpenSampleStream(info.Id);
+        return s == null ? null : new VoiceSample(info, OggOpus.Decode(s, 24000), 24000);
+    }
 
     /// <summary>Searches registered voices. Every non-null filter must match (case-insensitive); <paramref name="query"/>
     /// terms are matched against name, id, description, category, region and tags.</summary>
@@ -60,5 +82,7 @@ public static class VoiceRegistry
     {
         Packs.Clear();
         ById.Clear();
+        SamplePacks.Clear();
+        SamplesById.Clear();
     }
 }

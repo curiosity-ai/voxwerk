@@ -14,7 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Voxwerk\Voxwerk.csproj" />
-    <ProjectReference Include="..\Voices\Voxwerk.Voices.English\Voxwerk.Voices.English.csproj" />
+    <ProjectReference Include="..\Voices\Voxwerk.Voices.English.Samples\Voxwerk.Voices.English.Samples.csproj" />
   </ItemGroup>
 
 </Project>

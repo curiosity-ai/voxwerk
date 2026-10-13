@@ -5,6 +5,7 @@
   </Folder>
   <Folder Name="/src/Voices/">
     <Project Path="src/Voices/Voxwerk.Voices.English/Voxwerk.Voices.English.csproj" />
+    <Project Path="src/Voices/Voxwerk.Voices.English.Samples/Voxwerk.Voices.English.Samples.csproj" />
     <Project Path="src/Voices/Voxwerk.Voices.English.African/Voxwerk.Voices.English.African.csproj" />
     <Project Path="src/Voices/Voxwerk.Voices.English.American.Characters/Voxwerk.Voices.English.American.Characters.csproj" />
     <Project Path="src/Voices/Voxwerk.Voices.English.American.Commercial/Voxwerk.Voices.English.American.Commercial.csproj" />

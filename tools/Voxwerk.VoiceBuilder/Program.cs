@@ -217,7 +217,9 @@ internal static class Commands
             rejected = doc.RootElement.EnumerateObject().Where(p => !p.Value.GetProperty("pass").GetBoolean()).Select(p => p.Name).ToHashSet();
         }
         int bitrate = o.TryGetValue("bitrate", out var br) ? int.Parse(br, CultureInfo.InvariantCulture) : 24000;
-        var byPackage = new Dictionary<string, List<VoiceInfo>>();
+        // Metadata of every packed voice goes to the language package; each reference sample to its (optional) audio package.
+        var packed = new List<VoiceInfo>();
+        var perPackage = new Dictionary<string, int>();
         int skipped = 0;
         foreach (var s in spec)
         {
@@ -227,40 +229,28 @@ internal static class Commands
                 skipped++;
                 continue;
             }
-            string package = s.Package ?? s.Region;
-            string pkgDir = Path.Combine(outRoot, $"Voxwerk.Voices.English.{package}");
+            string package = $"Voxwerk.Voices.English.{s.Package ?? s.Region}";
+            string pkgDir = Path.Combine(outRoot, package);
             if (!Directory.Exists(pkgDir)) throw new DirectoryNotFoundException(pkgDir);
             var pcm = AudioFile.ReadMono(wavPath, 24000);
             var opus = OggOpus.Encode(pcm, 24000, bitrate, new Dictionary<string, string> { ["title"] = s.Name, ["artist"] = "Voxwerk", ["comment"] = s.Id });
             Directory.CreateDirectory(Path.Combine(pkgDir, "Resources", "samples"));
-            File.WriteAllBytes(Path.Combine(pkgDir, "Resources", "samples", s.Id + ".opus"), opus);
-            string cloneWav = WavPath(work, s.Id + ".clone");
-            double cloneSeconds = 0;
-            if (File.Exists(cloneWav) && rejected?.Contains(s.Id + ".clone") != true)
-            {
-                var clonePcm = AudioFile.ReadMono(cloneWav, 24000);
-                cloneSeconds = Math.Round(clonePcm.Length / 24000.0, 2);
-                File.WriteAllBytes(Path.Combine(pkgDir, "Resources", "samples", s.Id + ".clone.opus"),
-                    OggOpus.Encode(clonePcm, 24000, bitrate, new Dictionary<string, string> { ["title"] = s.Name + " (cloned)", ["artist"] = "Voxwerk", ["comment"] = s.Id }));
-            }
-            var info = new VoiceInfo
+            File.WriteAllBytes(Path.Combine(pkgDir, "Resources", "samples", EmbeddedVoiceSamplePack.ResourceName(s.Id)), opus);
+            packed.Add(new VoiceInfo
             {
                 Id = s.Id, Name = s.Name, Language = s.Language, Country = s.Country, Region = s.Region, Style = s.Style, Category = s.Category,
-                Gender = s.Gender, Age = s.Age, Description = s.Description, Tags = s.Tags, SampleText = s.Script,
-                SampleSeconds = Math.Round(pcm.Length / 24000.0, 2),
-                CloneText = cloneSeconds > 0 ? CloneSentence : "",
-                CloneSeconds = cloneSeconds,
-            };
-            (byPackage.TryGetValue(package, out var l) ? l : byPackage[package] = []).Add(info);
+                Gender = s.Gender, Age = s.Age, Description = s.Description, Tags = s.Tags, DesignPrompt = s.DesignPrompt,
+                SampleText = s.Script, SampleSeconds = Math.Round(pcm.Length / 24000.0, 2), SamplePackage = package,
+            });
+            perPackage[package] = perPackage.GetValueOrDefault(package) + 1;
         }
-        foreach (var (package, list) in byPackage)
-        {
-            string path = Path.Combine(outRoot, $"Voxwerk.Voices.English.{package}", "Resources", "voices.json");
-            var existing = File.Exists(path) ? JsonSerializer.Deserialize<List<VoiceInfo>>(File.ReadAllText(path), Json) ?? [] : [];
-            var merged = existing.Where(e => list.All(n => n.Id != e.Id)).Concat(list).OrderBy(v => v.Id, StringComparer.Ordinal).ToList();
-            File.WriteAllText(path, JsonSerializer.Serialize(merged, new JsonSerializerOptions(Json) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
-            Console.Error.WriteLine($"{package}: {list.Count} voices packed ({merged.Count} total)");
-        }
+        string metaPath = Path.Combine(outRoot, "Voxwerk.Voices.English", "Resources", "voices.json");
+        var existing = File.Exists(metaPath) ? JsonSerializer.Deserialize<List<VoiceInfo>>(File.ReadAllText(metaPath), Json) ?? [] : [];
+        var ids = packed.Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
+        var merged = existing.Where(e => !ids.Contains(e.Id)).Concat(packed).OrderBy(v => v.Id, StringComparer.Ordinal).ToList();
+        File.WriteAllText(metaPath, JsonSerializer.Serialize(merged, new JsonSerializerOptions(Json) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+        foreach (var (package, n) in perPackage.OrderBy(p => p.Key, StringComparer.Ordinal)) Console.Error.WriteLine($"{package}: {n} samples packed");
+        Console.Error.WriteLine($"Voxwerk.Voices.English: {packed.Count} voices packed ({merged.Count} total)");
         if (skipped > 0) Console.Error.WriteLine($"{skipped} voices skipped (not generated or rejected by QA)");
         return 0;
     }

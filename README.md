@@ -250,60 +250,67 @@ fixed workload on 4 threads: PyTorch 62.7 s (RTF 7.9; talker 447 ms/frame, decod
 
 ## Voice packages
 
-Ready-made English voices ship as NuGet packages, one per region, each with a `Register()` method. Every voice
-costs about 56 KB (24 kbps Opus: ~36 KB design sample + ~19 KB clone sample), so the two big regions are split by
-**style** (the voice's primary use: `Narration`, `Conversational`, `Characters`, `Commercial`) to keep each package
-in the tens of megabytes:
+Ready-made English voices come in two layers:
 
-| Package | Country ids in voice ids |
+- **`Voxwerk.Voices.English`** (the language package, a few MB): the catalog of every English voice, with id, name,
+  accent, style, gender, age, description, tags and the **design prompt**. With just this package any voice can be
+  spoken through the 1.7B VoiceDesign model. Register it with `EnglishVoices.Register()`.
+- **Optional audio packages**: only the reference samples (24 kbps Ogg Opus, ~36 KB per voice) needed to **clone** a
+  voice with the Base model. Each package's `Register()` registers the catalog plus its samples.
+  `Voxwerk.Voices.English.Samples` pulls in all of them, and its `EnglishVoiceSamples.RegisterAll()` registers them all.
+
+| Audio package | Voices (country id) |
 |---|---|
-| `Voxwerk.Voices.English.American.Narration.Female` / `.Male` | `us`: General American audiobook, documentary, e-learning, meditation voices |
-| `Voxwerk.Voices.English.American.Conversational.Female` / `.Male` | `us`: podcast, assistant, customer-service, social-media voices |
-| `Voxwerk.Voices.English.American.Characters` / `.Commercial` | `us`: game/animation characters; ads, radio, news, corporate |
-| `Voxwerk.Voices.English.American.Regional` | `us`: Southern, Midwest, Northeast, New York, Boston, Chicago, African American |
-| `Voxwerk.Voices.English.British.Narration` / `.Conversational` / `.Characters` / `.Commercial` | `gb` (incl. Received Pronunciation, Yorkshire, Geordie, Cockney, Welsh) |
-| `Voxwerk.Voices.English.Irish` / `.Scottish` | `ie` / `sct` |
-| `Voxwerk.Voices.English.Canadian` / `.Australian` / `.NewZealand` | `ca` / `au` / `nz` |
-| `Voxwerk.Voices.English.Indian` | `in` (incl. Hindi- and Tamil-accented) |
-| `Voxwerk.Voices.English.African` | `ng`, `za`, `africa` |
-| `Voxwerk.Voices.English.Asian` | `ph`, `sg`, `my`, `cn`, `jp`, `kr`, `id` |
-| `Voxwerk.Voices.English.European` | `de`, `fr`, `es`, `it`, `nl`, `pl`, `ru`, ... (accented English) |
-| `Voxwerk.Voices.English.International` | `jm`, `tr`, `arab`, `intl` |
-| `Voxwerk.Voices.English` | meta package: `EnglishVoices.RegisterAll()` |
+| `….American.Narration.Female` / `.Male` | `us`: General American audiobook, documentary, e-learning, meditation voices |
+| `….American.Conversational.Female` / `.Male` | `us`: podcast, assistant, customer-service, social-media voices |
+| `….American.Characters` / `.Commercial` | `us`: game/animation characters; ads, radio, news, corporate |
+| `….American.Regional` | `us`: Southern, Midwest, Northeast, New York, Boston, Chicago, African American |
+| `….British.Narration` / `.Conversational` / `.Characters` / `.Commercial` | `gb` (incl. Received Pronunciation, Yorkshire, Geordie, Cockney, Welsh) |
+| `….Irish` / `.Scottish` | `ie` / `sct` |
+| `….Canadian` / `.Australian` / `.NewZealand` | `ca` / `au` / `nz` |
+| `….Indian` | `in` (incl. Hindi- and Tamil-accented) |
+| `….African` | `ng`, `za`, `africa` |
+| `….Asian` | `ph`, `sg`, `my`, `cn`, `jp`, `kr`, `id` |
+| `….European` | `de`, `fr`, `es`, `it`, `nl`, `pl`, `ru`, ... (accented English) |
+| `….International` | `jm`, `tr`, `arab`, `intl` |
 
-Voice ids are `<language>-<country>-<voice-name>` in kebab-case, e.g. `en-gb-rupert-vale`. Every voice has
-metadata (name, region, accent category, style, gender, age, description, tags) and two Ogg Opus samples (24 kbps):
-
-- **design**: the voice introducing itself ("Hi, I'm Rupert. ..." + a short self-description + an example line),
-  generated from its written description with the 1.7B VoiceDesign model. This is also the reference audio used to
-  clone the voice.
-- **clone**: the same voice re-created by **voice cloning** (0.6B Base, ICL with the design sample and its exact
-  transcript) reading one fixed sentence shared by all voices, so the two approaches and the cloning fidelity can be
-  compared side by side.
+(`…` = `Voxwerk.Voices.English`.) Voice ids are `<language>-<country>-<voice-name>` in kebab-case, e.g.
+`en-gb-rupert-vale`. `VoiceInfo.SamplePackage` names the audio package of each voice. A voice's sample is the voice
+introducing itself ("Hi, I'm Rupert. ..." + a short self-description + an example line), generated from its design
+prompt; `VoiceInfo.SampleText` is its exact transcript, used for ICL cloning.
 
 ```bash
 voxwerk voices --region British --gender female --search "calm"              # list / search / filter (--json too)
 voxwerk voices --country us --style characters --age old                    # filter by style (narration, ...)
-voxwerk voice en-gb-rupert-vale                                             # metadata
-voxwerk voice-play en-gb-rupert-vale [--kind clone]                         # play a sample
-voxwerk voice-sample en-gb-rupert-vale --kind clone --out rupert.wav       # export (.opus as-is or decoded .wav)
-voxwerk synth --voice-id en-gb-rupert-vale --text "Good evening." --out out.wav
+voxwerk voice en-gb-rupert-vale                                             # metadata, design prompt, audio package
+voxwerk voice-play en-gb-rupert-vale                                        # play the sample
+voxwerk voice-sample en-gb-rupert-vale --out rupert.wav                    # export (.opus as-is or decoded .wav)
+voxwerk synth  --voice-id en-gb-rupert-vale --text "Good evening."           # clone the sample (Base model); without
+                                                                            # the audio package: falls back to design
+voxwerk design --voice-id en-gb-rupert-vale --text "Good evening."           # VoiceDesign from the design prompt
 ```
 
 ```csharp
 using Voxwerk.Voices;
-Voxwerk.Voices.English.EnglishVoices.RegisterAll();          // or e.g. EnglishBritishNarrationVoices.Register()
+Voxwerk.Voices.English.EnglishVoices.Register();                       // catalog only
 foreach (var v in VoiceRegistry.Search("calm narration", country: "gb", gender: "female")) Console.WriteLine(v.Id);
 VoiceInfo info = VoiceRegistry.GetVoiceInfo("en-gb-rupert-vale")!;
-VoiceSample sample = VoiceRegistry.GetVoiceSample(info.Id, VoiceSampleKind.Clone)!;      // 24 kHz PCM
+
+// 1) Without audio: VoiceDesign from the voice's design prompt.
+using (var design = Qwen3Tts.Load(voiceDesignModelDir))
+    design.SynthesizeVoiceDesign("Good evening.", info.DesignPrompt, "english");
+
+// 2) With the audio package: clone the reference sample with the Base model (consistent voice across texts).
+Voxwerk.Voices.English.British.Narration.EnglishBritishNarrationVoices.Register();
 using var tts = Qwen3Tts.Load(baseModelDir);
 var voice = tts.CreateVoiceClonePrompt(info.Id);   // decodes the sample, clones it (ICL), caches the prompt on disk
 var result = tts.Synthesize("Good evening.", voice, "english");
 ```
 
-The core library defines the contracts (`IVoicePack`, `VoiceInfo`, `VoiceRegistry`, `EmbeddedVoicePack`) and the pure C#
-Ogg Opus codec (`OggOpus`, built on Concentus, no native dependencies); a package is just embedded `voices.json` +
-`<id>.opus` / `<id>.clone.opus` resources plus a `Register()` call.
+The core library defines the contracts (`IVoicePack` for catalogs, `IVoiceSamplePack` for audio, `VoiceInfo`,
+`VoiceRegistry`, `EmbeddedVoicePack`, `EmbeddedVoiceSamplePack`) and the pure C# Ogg Opus codec (`OggOpus`, built on
+Concentus, no native dependencies). A catalog package is an embedded `voices.json`; an audio package is a set of embedded
+`<id>.opus` resources; each also has a `Register()` call.
 
 ### How the voices were made
 
@@ -313,8 +320,7 @@ a new voice was written from scratch: an invented name, a rewritten description 
 self-introduction and example line in the genre of the original preview (checked to share no 4-word phrase with the
 source text). The audio is generated by Qwen3-TTS VoiceDesign from that new description; no third-party recording was
 cloned or included, and licensed celebrity voices of the catalog were excluded. Generated samples pass an automatic
-quality gate (Whisper word error rate, pitch vs. gender, pacing, and clone-to-design speaker similarity); failures are
-regenerated with new seeds. The build is reproducible with `tools/voices/run_pipeline.py` and `tools/Voxwerk.VoiceBuilder`.
+quality gate (Whisper word error rate, pitch vs. gender, pacing); failures are regenerated with new seeds. The build is reproducible with `tools/voices/run_pipeline.py` and `tools/Voxwerk.VoiceBuilder`.
 
 ## Building
 

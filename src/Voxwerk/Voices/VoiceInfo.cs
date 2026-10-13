@@ -39,19 +39,21 @@ public sealed record VoiceInfo
     /// <summary>Style / use-case tags, e.g. "narration", "calm", "deep".</summary>
     public IReadOnlyList<string> Tags { get; init; } = [];
 
-    /// <summary>Exact transcript of the voice sample (used as the reference text for voice cloning).</summary>
+    /// <summary>Voice description given to the VoiceDesign model (<see cref="Qwen3Tts.SynthesizeVoiceDesign"/>); speaking
+    /// with it needs no audio package.</summary>
+    public string DesignPrompt { get; init; } = "";
+
+    /// <summary>Exact transcript of the reference sample (used as the reference text for voice cloning).</summary>
     public required string SampleText { get; init; }
 
-    /// <summary>Duration of the voice sample in seconds.</summary>
+    /// <summary>Duration of the reference sample in seconds.</summary>
     public double SampleSeconds { get; init; }
 
-    /// <summary>Text of the <see cref="VoiceSampleKind.Clone"/> sample (the same fixed sentence for every voice), or empty.</summary>
-    public string CloneText { get; init; } = "";
+    /// <summary>Optional package that carries the reference sample used for voice cloning, e.g.
+    /// <c>Voxwerk.Voices.English.American.Narration.Female</c>.</summary>
+    public string SamplePackage { get; init; } = "";
 
-    /// <summary>Duration of the clone sample in seconds (0 when the voice has none).</summary>
-    public double CloneSeconds { get; init; }
-
-    /// <summary>Name of the package that provides the voice (filled in on registration).</summary>
+    /// <summary>Name of the package that provides the voice metadata (filled in on registration).</summary>
     [JsonIgnore]
     public string Package { get; init; } = "";
 
@@ -65,21 +67,9 @@ public sealed record VoiceInfo
     }
 }
 
-/// <summary>Which recording of a voice to fetch.</summary>
-public enum VoiceSampleKind
-{
-    /// <summary>The voice introducing itself, generated from its description with the VoiceDesign model. This is the
-    /// reference audio used when the voice is cloned (<see cref="VoiceInfo.SampleText"/> is its transcript).</summary>
-    Design,
-
-    /// <summary>The same voice re-created by voice cloning from the design sample (Base model), reading
-    /// <see cref="VoiceInfo.CloneText"/> - a fixed sentence shared by all voices, for comparing the two approaches.</summary>
-    Clone,
-}
-
-/// <summary>A decoded voice sample: 24 kHz mono audio, its kind and transcript.</summary>
-public sealed record VoiceSample(VoiceInfo Info, VoiceSampleKind Kind, float[] Audio, int SampleRate)
+/// <summary>A decoded reference sample: 24 kHz mono audio of the voice saying <see cref="VoiceInfo.SampleText"/>.</summary>
+public sealed record VoiceSample(VoiceInfo Info, float[] Audio, int SampleRate)
 {
     /// <summary>What the sample says.</summary>
-    public string Text => Kind == VoiceSampleKind.Clone ? Info.CloneText : Info.SampleText;
+    public string Text => Info.SampleText;
 }

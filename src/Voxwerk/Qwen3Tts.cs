@@ -167,7 +167,7 @@ public sealed class Qwen3Tts : IDisposable
     {
         Require(Qwen3TtsModelType.Base, "Voice cloning");
         var info = Voices.VoiceRegistry.GetVoiceInfo(voiceId)
-                   ?? throw new ArgumentException($"Unknown voice '{voiceId}'. Register a voice package (e.g. EnglishVoices.RegisterAll()) or check `voxwerk voices`.", nameof(voiceId));
+                   ?? throw new ArgumentException($"Unknown voice '{voiceId}'. Register a voice package (e.g. EnglishVoices.Register()) or check `voxwerk voices`.", nameof(voiceId));
         cacheDir ??= Path.Combine(ModelDownloader.DefaultCacheDir, "prompts");
         string? cacheFile = cacheDir.Length == 0 ? null
             : Path.Combine(cacheDir, $"{Config.TtsModelSize}-{Config.HiddenSize}", info.Id + ".vxp");
@@ -184,7 +184,9 @@ public sealed class Qwen3Tts : IDisposable
                 // Corrupt or stale cache entry: rebuild below.
             }
         }
-        var sample = Voices.VoiceRegistry.GetVoiceSample(info.Id) ?? throw new InvalidDataException($"Voice '{info.Id}' has no sample audio.");
+        var sample = Voices.VoiceRegistry.GetVoiceSample(info.Id) ?? throw new InvalidDataException(
+            $"The reference sample of voice '{info.Id}' is not installed: add the package {info.SamplePackage} and call its Register() " +
+            "to clone it, or speak it without audio through the VoiceDesign model and its DesignPrompt.");
         var prompt = CreateVoiceClonePrompt(sample.Audio, info.SampleText);
         if (cacheFile != null)
         {

@@ -15,14 +15,15 @@ internal static class Cli
         Usage:
           voxwerk synth  --text <text> --ref <ref.wav> [--ref-text <transcript>] [options]   clone a voice (Base models)
           voxwerk synth  --text <text> --voice-id <id> [options]                           speak with a packaged voice
+                 (clones its sample with the Base model; without the voice's audio package it uses `design`)
           voxwerk design --text <text> --voice <description> [options]                     describe a voice (VoiceDesign)
+          voxwerk design --text <text> --voice-id <id> [options]                           packaged voice from its design prompt
           voxwerk custom --text <text> --speaker <name> [--instruct <style>] [options]     built-in speakers (CustomVoice)
           voxwerk voices [--search <terms>] [--region <r>] [--country <c>] [--category <c>] [--gender <g>] [--age <a>]
                          [--style narration|conversational|characters|commercial] [--json]
           voxwerk voice <id>                                                             show a packaged voice
-          voxwerk voice-sample <id> [--kind design|clone] [--out <file.opus|file.wav>]   export a voice sample
-          voxwerk voice-play <id> [--kind design|clone]                                  play a voice sample
-                 (design = generated from the description; clone = re-created by voice cloning, fixed sentence)
+          voxwerk voice-sample <id> [--out <file.opus|file.wav>]                         export a voice sample
+          voxwerk voice-play <id>                                                        play a voice sample
           voxwerk speakers  [--model <dir|repo>]
           voxwerk languages [--model <dir|repo>]
           voxwerk download  [--model <repo>]
@@ -36,7 +37,8 @@ internal static class Cli
           --speaker <name>         Custom voice: built-in speaker (see `voxwerk speakers`)
           --instruct <style>       Custom voice: speaking-style instruction (1.7B CustomVoice only)
           --ref <wav>              Reference voice recording (any sample rate, mixed to mono)
-          --voice-id <id>          Packaged voice to clone instead of --ref, e.g. en-us-... (see `voxwerk voices`)
+          --voice-id <id>          Packaged voice (see `voxwerk voices`): synth clones its sample instead of --ref,
+                                   design speaks its design prompt instead of --voice
           --ref-text <text>        Transcript of the reference (enables ICL mode, best quality)
                                    (or --ref-text-file <path>)
           --x-vector-only          Clone from the speaker embedding only (no transcript needed)
@@ -72,7 +74,7 @@ internal static class Cli
         }
         try
         {
-            Voxwerk.Voices.English.EnglishVoices.RegisterAll();
+            Voxwerk.Voices.English.Samples.EnglishVoiceSamples.RegisterAll();
             bool positional = args[0] is "voice" or "voice-sample" or "voice-play";
             var opts = positional ? new Dictionary<string, string?>() : Parse(args.Skip(1).ToArray());
             switch (args[0])
@@ -162,6 +164,11 @@ internal static class Cli
         if (refPath != null && !File.Exists(refPath)) throw new FileNotFoundException($"Reference audio not found: {refPath}");
         if (voiceId != null && !Voxwerk.Voices.VoiceRegistry.Contains(voiceId))
             throw new ArgumentException($"Unknown voice '{voiceId}'. List voices with `voxwerk voices`.");
+        if (voiceId != null && !Voxwerk.Voices.VoiceRegistry.HasSample(voiceId))
+        {
+            Console.Error.WriteLine($"note: the audio package of '{voiceId}' is not installed; speaking it from its design prompt (VoiceDesign).");
+            return await DesignAsync(o);
+        }
         string? refText = Get(o, "ref-text") ?? (Get(o, "ref-text-file") is { } rf ? await File.ReadAllTextAsync(rf) : null);
         bool xvec = Flag(o, "x-vector-only");
         if (voiceId == null && !xvec && string.IsNullOrWhiteSpace(refText))
@@ -185,7 +192,8 @@ internal static class Cli
     {
         string text = await Text(o);
         string voice = Get(o, "voice") ?? Get(o, "instruct") ?? (Get(o, "voice-file") is { } vf ? await File.ReadAllTextAsync(vf)
-            : throw new ArgumentException("--voice <description> is required, e.g. --voice \"A calm middle-aged man with a deep, warm voice\"."));
+            : Get(o, "voice-id") is { } id ? (Voxwerk.Voices.VoiceRegistry.GetVoiceInfo(id) ?? throw new ArgumentException($"Unknown voice '{id}'. List voices with `voxwerk voices`.")).DesignPrompt
+            : throw new ArgumentException("--voice <description> or --voice-id <id> is required, e.g. --voice \"A calm middle-aged man with a deep, warm voice\"."));
         using var tts = await LoadAsync(o, Qwen3Tts.ExampleRepo(Qwen3TtsModelType.VoiceDesign));
         var result = tts.SynthesizeVoiceDesign(text, voice, Get(o, "language") ?? "auto", Options(o), onFrame: Progress);
         return Report(o, result, TimeSpan.Zero);
