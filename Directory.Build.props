@@ -16,6 +16,7 @@
     <PackageProjectUrl>https://github.com/theolivenbaum/voxwerk</PackageProjectUrl>
     <RepositoryUrl>https://github.com/theolivenbaum/voxwerk</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>tts;text-to-speech;qwen3-tts;voice-cloning;speech;audio</PackageTags>
   </PropertyGroup>
 </Project>
