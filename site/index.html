@@ -36,6 +36,10 @@
         <label><span>Style</span><select id="style"><option value="">All styles</option></select></label>
         <label><span>Gender</span><select id="gender"><option value="">Any</option></select></label>
         <label><span>Age</span><select id="age"><option value="">Any</option></select></label>
+        <button id="favs" type="button" class="ghost toggle" aria-pressed="false" title="Show only your favorite voices">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>
+          Favorites <span id="favcount" class="badge"></span>
+        </button>
         <button id="reset" type="button" class="ghost">Reset</button>
       </div>
     </div>
@@ -63,6 +67,9 @@
         <div class="head">
           <h2 class="name"></h2>
           <button class="id" type="button" title="Copy id"></button>
+          <button class="fav" type="button" aria-pressed="false" aria-label="Add to favorites" title="Add to favorites">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/></svg>
+          </button>
         </div>
         <p class="meta"></p>
         <p class="desc"></p>

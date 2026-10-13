@@ -8,6 +8,19 @@
   const AGE_ORDER = ["young", "middle-aged", "old"];
   let voices = [], matches = [], shown = 0;
 
+  // Per-browser memory (favorites, last search). Storage can be unavailable (private mode, blocked site data):
+  // every access is guarded and the page works without it.
+  const FAV_KEY = "voxwerk.favorites", SEARCH_KEY = "voxwerk.lastSearch";
+  function load(key, fallback) {
+    try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch { return fallback; }
+  }
+  function save(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage unavailable: keep in memory only */ }
+  }
+  const favorites = new Set(Array.isArray(load(FAV_KEY, [])) ? load(FAV_KEY, []) : []);
+  const favBtn = $("favs"), favCount = $("favcount");
+  let favOnly = false;
+
   // One shared player: only one sample plays at a time.
   const audio = new Audio();
   audio.preload = "none";
@@ -34,16 +47,40 @@
     fillSelect(els.category, cats);
   }
 
+  // A link with filters in its query string wins; otherwise the last search of this browser is restored.
   function readState() {
     const p = new URLSearchParams(location.search);
-    for (const [k, el] of Object.entries(els)) el.value = p.get(k) || "";
+    const fromUrl = Object.keys(els).some((k) => p.has(k));
+    const saved = fromUrl ? {} : load(SEARCH_KEY, {}) || {};
+    for (const [k, el] of Object.entries(els)) el.value = (fromUrl ? p.get(k) : saved[k]) || "";
+    setFavOnly(!fromUrl && saved.favorites === true);
   }
 
   function writeState() {
-    const p = new URLSearchParams();
-    for (const [k, el] of Object.entries(els)) if (el.value) p.set(k, el.value);
+    const p = new URLSearchParams(), state = { favorites: favOnly };
+    for (const [k, el] of Object.entries(els)) if (el.value) { p.set(k, el.value); state[k] = el.value; }
     const qs = p.toString();
     history.replaceState(null, "", (qs ? "?" + qs : location.pathname) + location.hash);
+    save(SEARCH_KEY, state);
+  }
+
+  function setFavOnly(on) {
+    favOnly = on;
+    favBtn.setAttribute("aria-pressed", String(on));
+  }
+
+  function updateFavCount() {
+    favCount.textContent = favorites.size ? String(favorites.size) : "";
+  }
+
+  function toggleFavorite(v, btn) {
+    if (favorites.has(v.id)) favorites.delete(v.id); else favorites.add(v.id);
+    const on = favorites.has(v.id);
+    btn.setAttribute("aria-pressed", String(on));
+    btn.setAttribute("aria-label", on ? `Remove ${v.name} from favorites` : `Add ${v.name} to favorites`);
+    btn.title = on ? "Remove from favorites" : "Add to favorites";
+    save(FAV_KEY, [...favorites]);
+    updateFavCount();
   }
 
   function apply() {
@@ -51,12 +88,16 @@
     const f = { region: els.region.value, category: els.category.value, style: els.style.value, gender: els.gender.value, age: els.age.value };
     matches = voices.filter((v) =>
       (!f.region || v.region === f.region) && (!f.category || v.category === f.category) && (!f.style || v.style === f.style) &&
-      (!f.gender || v.gender === f.gender) && (!f.age || v.age === f.age) && terms.every((t) => v._hay.includes(t)));
+      (!f.gender || v.gender === f.gender) && (!f.age || v.age === f.age) && (!favOnly || favorites.has(v.id)) &&
+      terms.every((t) => v._hay.includes(t)));
     list.replaceChildren();
     shown = 0;
     more();
     count.textContent = `${matches.length.toLocaleString()} of ${voices.length.toLocaleString()} voices`;
     empty.hidden = matches.length > 0;
+    empty.textContent = favOnly && favorites.size === 0
+      ? "No favorites yet. Use the star on a voice to add it."
+      : "No voice matches these filters.";
     writeState();
   }
 
@@ -75,6 +116,15 @@
     const idBtn = li.querySelector(".id");
     idBtn.textContent = v.id;
     idBtn.addEventListener("click", () => copy(v.id, idBtn));
+    const fav = li.querySelector(".fav");
+    if (favorites.has(v.id)) {
+      fav.setAttribute("aria-pressed", "true");
+      fav.setAttribute("aria-label", `Remove ${v.name} from favorites`);
+      fav.title = "Remove from favorites";
+    } else {
+      fav.setAttribute("aria-label", `Add ${v.name} to favorites`);
+    }
+    fav.addEventListener("click", () => toggleFavorite(v, fav));
     const meta = li.querySelector(".meta");
     const parts = [v.category, v.style, v.gender, v.age].filter(Boolean);
     meta.innerHTML = parts.map((p, i) => i === 0 ? `<b>${esc(p)}</b>` : esc(p)).join(" · ") +
@@ -171,7 +221,17 @@
   els.q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(apply, 120); });
   els.region.addEventListener("change", () => { refreshCategories(); apply(); });
   for (const k of ["category", "style", "gender", "age"]) els[k].addEventListener("change", apply);
-  $("reset").addEventListener("click", () => { for (const el of Object.values(els)) el.value = ""; refreshCategories(); apply(); });
+  $("reset").addEventListener("click", () => { for (const el of Object.values(els)) el.value = ""; setFavOnly(false); refreshCategories(); apply(); });
+  favBtn.addEventListener("click", () => { setFavOnly(!favOnly); apply(); });
+  // Keep favorites in sync when they change in another tab.
+  window.addEventListener("storage", (e) => {
+    if (e.key !== FAV_KEY) return;
+    favorites.clear();
+    for (const id of load(FAV_KEY, [])) favorites.add(id);
+    updateFavCount();
+    document.querySelectorAll(".voice").forEach((li) => li.querySelector(".fav").setAttribute("aria-pressed", String(favorites.has(li.dataset.id))));
+  });
+  updateFavCount();
   window.addEventListener("hashchange", reveal);
   new IntersectionObserver((e) => { if (e[0].isIntersecting && shown < matches.length) more(); }, { rootMargin: "800px" }).observe(sentinel);
 
