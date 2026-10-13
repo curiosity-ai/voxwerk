@@ -324,8 +324,8 @@ Concentus, no native dependencies). A catalog package is an embedded `voices.jso
 
 `site/` is a static page that lists every voice with search, filters (region, accent, style, gender, age), its sample,
 design prompt and usage. `python scripts/build_site.py _site` assembles it from the catalog and the audio packages
-(`cd _site && python -m http.server` to preview). `.github/workflows/pages.yml` publishes it to GitHub Pages on every push
-to `main` that touches the voices or the site (set Settings → Pages → Source to "GitHub Actions" once).
+(`cd _site && python -m http.server` to preview). `.github/workflows/pages.yml` builds it on every push to `main` that touches
+the voices or the site and publishes it to the `gh-pages` branch (Settings → Pages → Deploy from a branch: `gh-pages`, `/`).
 
 ### How the voices were made
 
