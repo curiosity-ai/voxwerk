@@ -21,6 +21,7 @@ internal static class Cli
           --text <text>            Text to speak (or --text-file <path>)
           --ref <wav>              Reference voice recording (any sample rate, mixed to mono)
           --ref-text <text>        Transcript of the reference (enables ICL mode, best quality)
+                                   (or --ref-text-file <path>)
           --x-vector-only          Clone from the speaker embedding only (no transcript needed)
           --language <name>        auto (default), english, chinese, german, ...
 
