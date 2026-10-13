@@ -250,12 +250,18 @@ fixed workload on 4 threads: PyTorch 62.7 s (RTF 7.9; talker 447 ms/frame, decod
 
 ## Voice packages
 
-Ready-made English voices ship as NuGet packages, one per region, each with a `Register()` method:
+Ready-made English voices ship as NuGet packages, one per region, each with a `Register()` method. Every voice
+costs about 56 KB (24 kbps Opus: ~36 KB design sample + ~19 KB clone sample), so the two big regions are split by
+**style** (the voice's primary use: `Narration`, `Conversational`, `Characters`, `Commercial`) to keep each package
+in the tens of megabytes:
 
 | Package | Country ids in voice ids |
 |---|---|
-| `Voxwerk.Voices.English.American` | `us` (General American, Southern, Midwest, Northeast, New York, Boston, Chicago, African American) |
-| `Voxwerk.Voices.English.British` | `gb` (British, Received Pronunciation, Yorkshire, Geordie, Cockney, Welsh) |
+| `Voxwerk.Voices.English.American.Narration.Female` / `.Male` | `us`: General American audiobook, documentary, e-learning, meditation voices |
+| `Voxwerk.Voices.English.American.Conversational.Female` / `.Male` | `us`: podcast, assistant, customer-service, social-media voices |
+| `Voxwerk.Voices.English.American.Characters` / `.Commercial` | `us`: game/animation characters; ads, radio, news, corporate |
+| `Voxwerk.Voices.English.American.Regional` | `us`: Southern, Midwest, Northeast, New York, Boston, Chicago, African American |
+| `Voxwerk.Voices.English.British.Narration` / `.Conversational` / `.Characters` / `.Commercial` | `gb` (incl. Received Pronunciation, Yorkshire, Geordie, Cockney, Welsh) |
 | `Voxwerk.Voices.English.Irish` / `.Scottish` | `ie` / `sct` |
 | `Voxwerk.Voices.English.Canadian` / `.Australian` / `.NewZealand` | `ca` / `au` / `nz` |
 | `Voxwerk.Voices.English.Indian` | `in` (incl. Hindi- and Tamil-accented) |
@@ -266,7 +272,7 @@ Ready-made English voices ship as NuGet packages, one per region, each with a `R
 | `Voxwerk.Voices.English` | meta package: `EnglishVoices.RegisterAll()` |
 
 Voice ids are `<language>-<country>-<voice-name>` in kebab-case, e.g. `en-gb-rupert-vale`. Every voice has
-metadata (name, region, accent category, gender, age, description, tags) and two Ogg Opus samples (24 kbps):
+metadata (name, region, accent category, style, gender, age, description, tags) and two Ogg Opus samples (24 kbps):
 
 - **design**: the voice introducing itself ("Hi, I'm Rupert. ..." + a short self-description + an example line),
   generated from its written description with the 1.7B VoiceDesign model. This is also the reference audio used to
@@ -276,7 +282,8 @@ metadata (name, region, accent category, gender, age, description, tags) and two
   compared side by side.
 
 ```bash
-voxwerk voices --region British --gender female --search "calm narration"   # list / search / filter (--json too)
+voxwerk voices --region British --gender female --search "calm"              # list / search / filter (--json too)
+voxwerk voices --country us --style characters --age old                    # filter by style (narration, ...)
 voxwerk voice en-gb-rupert-vale                                             # metadata
 voxwerk voice-play en-gb-rupert-vale [--kind clone]                         # play a sample
 voxwerk voice-sample en-gb-rupert-vale --kind clone --out rupert.wav       # export (.opus as-is or decoded .wav)
@@ -285,7 +292,7 @@ voxwerk synth --voice-id en-gb-rupert-vale --text "Good evening." --out out.wav
 
 ```csharp
 using Voxwerk.Voices;
-Voxwerk.Voices.English.EnglishVoices.RegisterAll();          // or EnglishBritishVoices.Register()
+Voxwerk.Voices.English.EnglishVoices.RegisterAll();          // or e.g. EnglishBritishNarrationVoices.Register()
 foreach (var v in VoiceRegistry.Search("calm narration", country: "gb", gender: "female")) Console.WriteLine(v.Id);
 VoiceInfo info = VoiceRegistry.GetVoiceInfo("en-gb-rupert-vale")!;
 VoiceSample sample = VoiceRegistry.GetVoiceSample(info.Id, VoiceSampleKind.Clone)!;      // 24 kHz PCM

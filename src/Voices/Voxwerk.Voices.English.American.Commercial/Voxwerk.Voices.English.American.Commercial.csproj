@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <PackageId>Voxwerk.Voices.English.American</PackageId>
-    <RootNamespace>Voxwerk.Voices.English.American</RootNamespace>
-    <Description>Ready-made American English voices for Voxwerk (United States English: General American and regional US accents.). Register with EnglishAmericanVoices.Register().</Description>
+    <PackageId>Voxwerk.Voices.English.American.Commercial</PackageId>
+    <RootNamespace>Voxwerk.Voices.English.American.Commercial</RootNamespace>
+    <Description>Ready-made English voices for Voxwerk. General American voices for commercials, radio, news, corporate and announcements. Register with EnglishAmericanCommercialVoices.Register().</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 

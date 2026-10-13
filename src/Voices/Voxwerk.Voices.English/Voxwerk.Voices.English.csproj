@@ -8,8 +8,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Voxwerk.Voices.English.American\Voxwerk.Voices.English.American.csproj" />
-    <ProjectReference Include="..\Voxwerk.Voices.English.British\Voxwerk.Voices.English.British.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.American.Characters\Voxwerk.Voices.English.American.Characters.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.American.Commercial\Voxwerk.Voices.English.American.Commercial.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.American.Conversational.Female\Voxwerk.Voices.English.American.Conversational.Female.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.American.Conversational.Male\Voxwerk.Voices.English.American.Conversational.Male.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.American.Narration.Female\Voxwerk.Voices.English.American.Narration.Female.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.American.Narration.Male\Voxwerk.Voices.English.American.Narration.Male.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.American.Regional\Voxwerk.Voices.English.American.Regional.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.British.Characters\Voxwerk.Voices.English.British.Characters.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.British.Commercial\Voxwerk.Voices.English.British.Commercial.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.British.Conversational\Voxwerk.Voices.English.British.Conversational.csproj" />
+    <ProjectReference Include="..\Voxwerk.Voices.English.British.Narration\Voxwerk.Voices.English.British.Narration.csproj" />
     <ProjectReference Include="..\Voxwerk.Voices.English.Irish\Voxwerk.Voices.English.Irish.csproj" />
     <ProjectReference Include="..\Voxwerk.Voices.English.Scottish\Voxwerk.Voices.English.Scottish.csproj" />
     <ProjectReference Include="..\Voxwerk.Voices.English.Canadian\Voxwerk.Voices.English.Canadian.csproj" />

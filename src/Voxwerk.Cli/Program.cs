@@ -17,7 +17,8 @@ internal static class Cli
           voxwerk synth  --text <text> --voice-id <id> [options]                           speak with a packaged voice
           voxwerk design --text <text> --voice <description> [options]                     describe a voice (VoiceDesign)
           voxwerk custom --text <text> --speaker <name> [--instruct <style>] [options]     built-in speakers (CustomVoice)
-          voxwerk voices [--search <terms>] [--region <r>] [--country <c>] [--category <c>] [--gender <g>] [--age <a>] [--json]
+          voxwerk voices [--search <terms>] [--region <r>] [--country <c>] [--category <c>] [--gender <g>] [--age <a>]
+                         [--style narration|conversational|characters|commercial] [--json]
           voxwerk voice <id>                                                             show a packaged voice
           voxwerk voice-sample <id> [--kind design|clone] [--out <file.opus|file.wav>]   export a voice sample
           voxwerk voice-play <id> [--kind design|clone]                                  play a voice sample

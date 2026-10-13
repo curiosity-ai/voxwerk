@@ -4,7 +4,7 @@ namespace Voxwerk.Voices;
 
 /// <summary>
 /// Global registry of available voices. Voice packages register themselves, e.g.
-/// <c>Voxwerk.Voices.English.EnglishVoices.RegisterAll()</c> or <c>EnglishAmericanVoices.Register()</c>;
+/// <c>Voxwerk.Voices.English.EnglishVoices.RegisterAll()</c> or <c>EnglishBritishNarrationVoices.Register()</c>;
 /// voices are then looked up by id (<c>en-us-marigold-vale</c>) or searched.
 /// </summary>
 public static class VoiceRegistry
@@ -46,12 +46,13 @@ public static class VoiceRegistry
     /// <summary>Searches registered voices. Every non-null filter must match (case-insensitive); <paramref name="query"/>
     /// terms are matched against name, id, description, category, region and tags.</summary>
     public static IEnumerable<VoiceInfo> Search(string? query = null, string? category = null, string? country = null,
-                                                string? region = null, string? gender = null, string? age = null, string? language = null)
+                                                string? region = null, string? gender = null, string? age = null, string? language = null,
+                                                string? style = null)
     {
         static bool Eq(string? filter, string value) => string.IsNullOrEmpty(filter) || value.Equals(filter, StringComparison.OrdinalIgnoreCase);
         static bool Has(string? filter, string value) => string.IsNullOrEmpty(filter) || value.Contains(filter, StringComparison.OrdinalIgnoreCase);
         return All.Where(v => Has(category, v.Category) && Eq(country, v.Country) && Eq(region, v.Region) && Eq(gender, v.Gender)
-                              && Eq(age, v.Age) && Eq(language, v.Language) && v.Matches(query ?? ""));
+                              && Eq(age, v.Age) && Eq(language, v.Language) && Eq(style, v.Style) && v.Matches(query ?? ""));
     }
 
     /// <summary>Removes every registration (mainly for tests).</summary>

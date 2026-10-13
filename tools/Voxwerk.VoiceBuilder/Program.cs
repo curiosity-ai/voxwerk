@@ -35,6 +35,9 @@ public sealed record VoiceSpec
     public string Language { get; init; } = "en";
     public required string Country { get; init; }
     public required string Region { get; init; }
+    /// <summary>Package suffix after <c>Voxwerk.Voices.English.</c>, e.g. <c>American.Narration.Female</c> (defaults to the region).</summary>
+    public string? Package { get; init; }
+    public string Style { get; init; } = "";
     public required string Category { get; init; }
     public required string Gender { get; init; }
     public string Age { get; init; } = "";
@@ -214,7 +217,7 @@ internal static class Commands
             rejected = doc.RootElement.EnumerateObject().Where(p => !p.Value.GetProperty("pass").GetBoolean()).Select(p => p.Name).ToHashSet();
         }
         int bitrate = o.TryGetValue("bitrate", out var br) ? int.Parse(br, CultureInfo.InvariantCulture) : 24000;
-        var byRegion = new Dictionary<string, List<VoiceInfo>>();
+        var byPackage = new Dictionary<string, List<VoiceInfo>>();
         int skipped = 0;
         foreach (var s in spec)
         {
@@ -224,7 +227,8 @@ internal static class Commands
                 skipped++;
                 continue;
             }
-            string pkgDir = Path.Combine(outRoot, $"Voxwerk.Voices.English.{s.Region}");
+            string package = s.Package ?? s.Region;
+            string pkgDir = Path.Combine(outRoot, $"Voxwerk.Voices.English.{package}");
             if (!Directory.Exists(pkgDir)) throw new DirectoryNotFoundException(pkgDir);
             var pcm = AudioFile.ReadMono(wavPath, 24000);
             var opus = OggOpus.Encode(pcm, 24000, bitrate, new Dictionary<string, string> { ["title"] = s.Name, ["artist"] = "Voxwerk", ["comment"] = s.Id });
@@ -241,21 +245,21 @@ internal static class Commands
             }
             var info = new VoiceInfo
             {
-                Id = s.Id, Name = s.Name, Language = s.Language, Country = s.Country, Region = s.Region, Category = s.Category,
+                Id = s.Id, Name = s.Name, Language = s.Language, Country = s.Country, Region = s.Region, Style = s.Style, Category = s.Category,
                 Gender = s.Gender, Age = s.Age, Description = s.Description, Tags = s.Tags, SampleText = s.Script,
                 SampleSeconds = Math.Round(pcm.Length / 24000.0, 2),
                 CloneText = cloneSeconds > 0 ? CloneSentence : "",
                 CloneSeconds = cloneSeconds,
             };
-            (byRegion.TryGetValue(s.Region, out var l) ? l : byRegion[s.Region] = []).Add(info);
+            (byPackage.TryGetValue(package, out var l) ? l : byPackage[package] = []).Add(info);
         }
-        foreach (var (region, list) in byRegion)
+        foreach (var (package, list) in byPackage)
         {
-            string path = Path.Combine(outRoot, $"Voxwerk.Voices.English.{region}", "Resources", "voices.json");
+            string path = Path.Combine(outRoot, $"Voxwerk.Voices.English.{package}", "Resources", "voices.json");
             var existing = File.Exists(path) ? JsonSerializer.Deserialize<List<VoiceInfo>>(File.ReadAllText(path), Json) ?? [] : [];
             var merged = existing.Where(e => list.All(n => n.Id != e.Id)).Concat(list).OrderBy(v => v.Id, StringComparer.Ordinal).ToList();
             File.WriteAllText(path, JsonSerializer.Serialize(merged, new JsonSerializerOptions(Json) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
-            Console.Error.WriteLine($"{region}: {list.Count} voices packed ({merged.Count} total)");
+            Console.Error.WriteLine($"{package}: {list.Count} voices packed ({merged.Count} total)");
         }
         if (skipped > 0) Console.Error.WriteLine($"{skipped} voices skipped (not generated or rejected by QA)");
         return 0;

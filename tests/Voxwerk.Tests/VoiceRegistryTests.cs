@@ -44,6 +44,8 @@ public class VoiceRegistryTests(ITestOutputHelper output)
         Assert.Contains(VoiceRegistry.Search("warm southern"), v => v.Id == "en-us-amber-hollis");
         Assert.Contains(VoiceRegistry.Search(country: "us", gender: "female", category: "southern"), v => v.Id == "en-us-amber-hollis");
         Assert.DoesNotContain(VoiceRegistry.Search(country: "gb"), v => v.Id == "en-us-amber-hollis");
+        Assert.Contains(VoiceRegistry.Search(style: "conversational"), v => v.Id == "en-us-amber-hollis");
+        Assert.DoesNotContain(VoiceRegistry.Search(style: "narration"), v => v.Id == "en-us-amber-hollis");
         Assert.DoesNotContain(VoiceRegistry.Search("baritone"), v => v.Id == "en-us-amber-hollis");
         Assert.NotNull(VoiceRegistry.GetVoiceSample("en-us-amber-hollis", VoiceSampleKind.Clone));
     }

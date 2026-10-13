@@ -24,6 +24,9 @@ public sealed record VoiceInfo
     /// <summary>Accent / category within the region, e.g. "US Southern", "Received Pronunciation".</summary>
     public required string Category { get; init; }
 
+    /// <summary>Primary use: <c>Narration</c>, <c>Conversational</c>, <c>Characters</c> or <c>Commercial</c>.</summary>
+    public string Style { get; init; } = "";
+
     /// <summary><c>female</c>, <c>male</c> or <c>unknown</c>.</summary>
     public required string Gender { get; init; }
 
@@ -52,11 +55,11 @@ public sealed record VoiceInfo
     [JsonIgnore]
     public string Package { get; init; } = "";
 
-    /// <summary>True when every term of <paramref name="query"/> appears in the name, id, description, category, region or tags.</summary>
+    /// <summary>True when every term of <paramref name="query"/> appears in the name, id, description, category, region, style or tags.</summary>
     public bool Matches(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return true;
-        string hay = string.Join(' ', [Id, Name, Description, Category, Region, Country, Gender, Age, .. Tags]);
+        string hay = string.Join(' ', [Id, Name, Description, Category, Region, Style, Country, Gender, Age, .. Tags]);
         return query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
                     .All(term => hay.Contains(term, StringComparison.OrdinalIgnoreCase));
     }

@@ -6,6 +6,8 @@ Usage: python assemble_spec.py <meta_in_dir> <meta_out_dir> <spec_out.json> [<pr
 * names must be unique and must not reuse any original catalog name;
 * descriptions / scripts must not copy any 4-word phrase from the original catalog text or preview transcript;
 * the spoken script is "Hi, I'm <First>. <intro> <sentence>";
+* style (Narration / Conversational / Characters / Commercial) comes from the first use-case tag; the large American and
+  British regions are split into per-style packages (American also per gender, plus American.Regional for US accents);
 * licensed celebrity / "iconic" voices of the source catalog are excluded entirely (no sound-alikes of real people).
 Entries that fail a check are written to the problems file for rewriting and left out of the spec.
 """
@@ -26,6 +28,30 @@ def words(s):
 def grams(s, n=4):
     w = words(s)
     return {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)}
+
+STYLE_TAGS = {
+    "Characters": {"character", "villain", "dramatic", "animation", "gaming", "game", "cartoon", "fantasy", "horror", "theatrical",
+                   "comedic", "comedy", "anime", "video-game", "creature", "pirate", "wizard"},
+    "Narration": {"narration", "audiobook", "storytelling", "documentary", "meditation", "educational", "explainer", "e-learning",
+                  "bedtime", "sleep", "asmr", "children", "tutorial", "poetry", "audiobooks", "narrator", "relaxation"},
+    "Commercial": {"commercial", "radio", "corporate", "advertising", "announcer", "news", "broadcast", "promo", "trailer", "sports",
+                   "presenter", "ivr", "newscast", "advert", "ads", "marketing", "promotional"},
+    "Conversational": {"conversational", "podcast", "social-media", "casual", "assistant", "customer-service", "vlog", "chatty"},
+}
+
+def style_of(tags):
+    for t in tags:
+        for style, names in STYLE_TAGS.items():
+            if t in names: return style
+    return "Conversational"
+
+def package_of(region, category, style, gender):
+    if region == "American":
+        if category != "American": return "American.Regional"
+        if style in ("Narration", "Conversational"): return f"American.{style}.{gender.capitalize()}"
+        return f"American.{style}"
+    if region == "British": return f"British.{style}"
+    return region
 
 inputs, originals = {}, set()
 for f in sorted(glob.glob(os.path.join(meta_in, "batch_*.json"))):
@@ -65,14 +91,19 @@ for f in sorted(glob.glob(os.path.join(meta_out, "batch_*.json"))):
             problems.append({"source_id": e["source_id"], "batch": os.path.basename(f), "name": name, "issues": issues})
             continue
         seen_names.add(nk); seen_ids.add(vid)
+        tags = [t.lower() for t in o["tags"]][:6]
+        style = style_of(tags)
         spec.append({
             "id": vid, "name": name, "language": "en", "country": e["country"], "region": e["region"],
+            "package": package_of(e["region"], e["category"], style, o["gender"]), "style": style,
             "category": e["category"], "gender": o["gender"], "age": o["age"],
-            "description": " ".join(o["description"].split()), "tags": [t.lower() for t in o["tags"]][:6],
+            "description": " ".join(o["description"].split()), "tags": tags,
             "design_prompt": " ".join(o["design_prompt"].split()), "script": " ".join(script.split()),
             "seed": int(hashlib.sha1(vid.encode()).hexdigest()[:6], 16), "source_id": e["source_id"],
         })
 json.dump(spec, open(spec_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 if problems_path: json.dump(problems, open(problems_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 print(f"{len(spec)} voices in spec, {len(problems)} with problems")
+from collections import Counter
+print("  packages:", ", ".join(f"{k} {n}" for k, n in sorted(Counter(v["package"] for v in spec).items())))
 for p in problems[:10]: print("  ", p["batch"], p["name"], p["issues"])

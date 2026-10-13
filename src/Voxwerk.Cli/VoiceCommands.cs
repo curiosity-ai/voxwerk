@@ -10,7 +10,8 @@ internal static class VoiceCommands
     public static int List(Dictionary<string, string?> o)
     {
         var voices = VoiceRegistry.Search(Cli.Get(o, "search"), Cli.Get(o, "category"), Cli.Get(o, "country"),
-                                          Cli.Get(o, "region"), Cli.Get(o, "gender"), Cli.Get(o, "age")).ToList();
+                                          Cli.Get(o, "region"), Cli.Get(o, "gender"), Cli.Get(o, "age"),
+                                          style: Cli.Get(o, "style")).ToList();
         int limit = Cli.I(o, "limit", int.MaxValue);
         if (Cli.Flag(o, "json"))
         {
@@ -23,9 +24,9 @@ internal static class VoiceCommands
             return 1;
         }
         foreach (var v in voices.Take(limit))
-            Console.WriteLine($"{v.Id,-34} {v.Gender,-7} {v.Age,-12} {v.Category,-24} {Trim(v.Description, 70)}");
-        Console.Error.WriteLine($"{voices.Count} voice(s){(voices.Count > limit ? $", showing {limit}" : "")}. Regions: " +
-                                string.Join(", ", voices.GroupBy(v => v.Region).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}")));
+            Console.WriteLine($"{v.Id,-34} {v.Gender,-7} {v.Age,-12} {v.Category,-24} {v.Style,-15} {Trim(v.Description, 60)}");
+        Console.Error.WriteLine($"{voices.Count} voice(s){(voices.Count > limit ? $", showing {limit}" : "")}. Packages: " +
+                                string.Join(", ", voices.GroupBy(v => v.Package.Replace("Voxwerk.Voices.English.", "")).OrderByDescending(g => g.Count()).Select(g => $"{g.Key} {g.Count()}")));
         return 0;
     }
 
@@ -37,6 +38,7 @@ internal static class VoiceCommands
         Console.WriteLine($"Language:    {v.Language}");
         Console.WriteLine($"Region:      {v.Region} ({v.Country})");
         Console.WriteLine($"Category:    {v.Category}");
+        Console.WriteLine($"Style:       {v.Style}");
         Console.WriteLine($"Gender/age:  {v.Gender}, {v.Age}");
         Console.WriteLine($"Tags:        {string.Join(", ", v.Tags)}");
         Console.WriteLine($"Description: {v.Description}");
