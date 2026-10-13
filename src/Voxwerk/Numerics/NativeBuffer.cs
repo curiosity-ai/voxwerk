@@ -13,12 +13,26 @@ public sealed unsafe class NativeBuffer<T> : IDisposable where T : unmanaged
         if (length < 0) throw new ArgumentOutOfRangeException(nameof(length));
         Length = length;
         nuint bytes = (nuint)Math.Max(1, length * sizeof(T));
-        _ptr = (T*)NativeMemory.AlignedAlloc(bytes, 64);
+        if (bytes >= HugePageThreshold && OperatingSystem.IsLinux())
+        {
+            // Large buffers: 2 MB-aligned and advised as transparent huge pages, so first touch costs one
+            // fault per 2 MB instead of per 4 KB (activations at audio rate are hundreds of MB).
+            bytes = (bytes + HugePage - 1) & ~(nuint)(HugePage - 1);
+            _ptr = (T*)NativeMemory.AlignedAlloc(bytes, HugePage);
+            LinuxMemory.AdviseHugePages(_ptr, bytes);
+        }
+        else
+        {
+            _ptr = (T*)NativeMemory.AlignedAlloc(bytes, 64);
+        }
         if (zero) NativeMemory.Clear(_ptr, bytes);
         GC.AddMemoryPressure((long)bytes);
     }
 
     public long Length { get; }
+
+    private const nuint HugePage = 2 * 1024 * 1024;
+    private const nuint HugePageThreshold = 8 * 1024 * 1024;
 
     public T* Ptr
     {
@@ -53,5 +67,27 @@ public sealed unsafe class NativeBuffer<T> : IDisposable where T : unmanaged
     ~NativeBuffer()
     {
         if (_ptr != null) NativeMemory.AlignedFree(_ptr);
+    }
+}
+
+internal static unsafe class LinuxMemory
+{
+    private const int MADV_HUGEPAGE = 14;
+    private static bool _unavailable;
+
+    [DllImport("libc", SetLastError = false)]
+    private static extern int madvise(void* addr, nuint length, int advice);
+
+    public static void AdviseHugePages(void* p, nuint bytes)
+    {
+        if (_unavailable) return;
+        try
+        {
+            _ = madvise(p, bytes, MADV_HUGEPAGE);
+        }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException)
+        {
+            _unavailable = true;
+        }
     }
 }

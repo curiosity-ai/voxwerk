@@ -91,6 +91,11 @@ public static unsafe class Gemm
                     for (int nb = nbBlock; nb < nbEnd; nb++)
                         Bf16.ToFloat(b.B16 + ((long)nb * K + k0) * NR, bBlock + (long)(nb - nbBlock) * kc * NR, kc * NR);
                 }
+                else if (b.IsInt8)
+                {
+                    for (int nb = nbBlock; nb < nbEnd; nb++)
+                        DequantizeInt8(b.I8 + ((long)nb * K + k0) * NR, b.Scale + nb * NR, bBlock + (long)(nb - nbBlock) * kc * NR, kc);
+                }
                 if (mode == InitBias || mode == InitLoadBias)
                 {
                     for (int j = 0; j < (nbEnd - nbBlock) * NR; j++)
@@ -106,7 +111,7 @@ public static unsafe class Gemm
                     float* ap = aPack + (long)t * kc * MR;
                     for (int nb = nbBlock; nb < nbEnd; nb++)
                     {
-                        float* panel = b.IsBf16 ? bBlock + (long)(nb - nbBlock) * kc * NR : b.F32 + ((long)nb * K + k0) * NR;
+                        float* panel = b.IsBf16 || b.IsInt8 ? bBlock + (long)(nb - nbBlock) * kc * NR : b.F32 + ((long)nb * K + k0) * NR;
                         float* bp = biasTile + (nb - nbBlock) * NR;
                         int cols = Math.Min(NR, N - nb * NR);
                         float* cp = c + (long)r0 * ldc + nb * NR;
@@ -355,7 +360,7 @@ public static unsafe class Gemm
     private const int WideCols = 96, WideRows = 4, WideKc = 64, WideMc = 256;
 
     /// <summary>Whether <see cref="Conv"/> takes the narrow-output path for this weight.</summary>
-    public static bool UseWideConv(PackedMatrix b) => UseAvx512 && !b.IsBf16 && b.N % WideCols == 0;
+    public static bool UseWideConv(PackedMatrix b) => UseAvx512 && !b.IsBf16 && !b.IsInt8 && b.N % WideCols == 0;
 
     /// <summary>
     /// <c>C[t, :] (+)= Σ_τ Σ_ci x[t·rowStride + τ·tapStride + ci] · B[τ·cin + ci, :] (+ bias)</c> for t &lt; m, where
@@ -501,6 +506,27 @@ public static unsafe class Gemm
             float* tile = stackalloc float[4 * NR];
             for (int nb = nb0; nb < nb1; nb++)
             {
+                if (m == 1 && nb + 1 < nb1 && UseAvx512)
+                {
+                    // Two weight panels streamed together: more misses in flight for the bandwidth-bound decode.
+                    if (b.IsInt8) PanelPairDotInt8(a, b, nb, tile);
+                    else if (b.IsBf16) PanelPairDotBf16(a, b, nb, tile);
+                    else goto single;
+                    for (int p2 = 0; p2 < 2; p2++)
+                    {
+                        int nbi = nb + p2;
+                        int cols2 = Math.Min(NR, b.N - nbi * NR);
+                        float* cp = c + nbi * NR;
+                        float* tp = tile + p2 * NR;
+                        if (accumulate && bias != null) for (int j = 0; j < cols2; j++) cp[j] += tp[j] + bias[nbi * NR + j];
+                        else if (accumulate) for (int j = 0; j < cols2; j++) cp[j] += tp[j];
+                        else if (bias != null) for (int j = 0; j < cols2; j++) cp[j] = tp[j] + bias[nbi * NR + j];
+                        else for (int j = 0; j < cols2; j++) cp[j] = tp[j];
+                    }
+                    nb++;
+                    continue;
+                }
+                single:
                 for (int r = 0; r < m; r += 2)
                 {
                     int mm = Math.Min(2, m - r);
@@ -520,9 +546,121 @@ public static unsafe class Gemm
         });
     }
 
+    private static void DequantizeInt8(sbyte* q, float* scale, float* dst, int rows)
+    {
+        for (int r = 0; r < rows; r++)
+            for (int j = 0; j < NR; j++) dst[r * NR + j] = q[r * NR + j] * scale[j];
+    }
+
+    private static Vector512<float> I8(sbyte* p) => Avx512F.ConvertToVector512Single(Avx512F.ConvertToVector512Int32(Vector128.Load(p)));
+
+    /// <summary>m = 1 dot of x against panels nb and nb + 1 (int8), streamed concurrently.</summary>
+    private static void PanelPairDotInt8(float* x, PackedMatrix b, int nb, float* outTile)
+    {
+        int K = b.K;
+        sbyte* w = b.I8 + (long)nb * K * NR;
+        sbyte* v = w + (long)K * NR;
+        Vector512<float> a0 = default, a1 = default, c0 = default, c1 = default;
+        for (int k = 0; k < K; k++)
+        {
+            var xk = Vector512.Create(x[k]);
+            a0 = Avx512F.FusedMultiplyAdd(xk, I8(w), a0);
+            a1 = Avx512F.FusedMultiplyAdd(xk, I8(w + 16), a1);
+            c0 = Avx512F.FusedMultiplyAdd(xk, I8(v), c0);
+            c1 = Avx512F.FusedMultiplyAdd(xk, I8(v + 16), c1);
+            w += 32;
+            v += 32;
+        }
+        float* sc = b.Scale + nb * NR;
+        Vector512.Store(a0 * Vector512.Load(sc), outTile);
+        Vector512.Store(a1 * Vector512.Load(sc + 16), outTile + 16);
+        Vector512.Store(c0 * Vector512.Load(sc + 32), outTile + 32);
+        Vector512.Store(c1 * Vector512.Load(sc + 48), outTile + 48);
+    }
+
+    /// <summary>m = 1 dot of x against panels nb and nb + 1 (bf16), streamed concurrently.</summary>
+    private static void PanelPairDotBf16(float* x, PackedMatrix b, int nb, float* outTile)
+    {
+        int K = b.K;
+        ushort* w = b.B16 + (long)nb * K * NR;
+        ushort* v = w + (long)K * NR;
+        Vector512<float> a0 = default, a1 = default, c0 = default, c1 = default;
+        for (int k = 0; k < K; k++)
+        {
+            var xk = Vector512.Create(x[k]);
+            a0 = Avx512F.FusedMultiplyAdd(xk, Bf16.Load512(w), a0);
+            a1 = Avx512F.FusedMultiplyAdd(xk, Bf16.Load512(w + 16), a1);
+            c0 = Avx512F.FusedMultiplyAdd(xk, Bf16.Load512(v), c0);
+            c1 = Avx512F.FusedMultiplyAdd(xk, Bf16.Load512(v + 16), c1);
+            w += 32;
+            v += 32;
+        }
+        Vector512.Store(a0, outTile);
+        Vector512.Store(a1, outTile + 16);
+        Vector512.Store(c0, outTile + 32);
+        Vector512.Store(c1, outTile + 48);
+    }
+
+    /// <summary>out[i, 0..32) = scale · Σ_k x_i[k] · q[k, 0..32) for an int8 panel, i &lt; m ≤ 2.</summary>
+    private static void PanelDotInt8(float* x, long ldx, int m, PackedMatrix b, int nb, float* outTile)
+    {
+        int K = b.K;
+        sbyte* w = b.I8 + (long)nb * K * NR;
+        float* sc = b.Scale + nb * NR;
+        if (UseAvx512)
+        {
+            Vector512<float> a0 = default, a1 = default, b0 = default, b1 = default, a2 = default, a3 = default;
+            float* y = m > 1 ? x + ldx : x;
+            int k = 0;
+            if (m == 1)
+            {
+                for (; k <= K - 2; k += 2)
+                {
+                    var x0 = Vector512.Create(x[k]); var x1 = Vector512.Create(x[k + 1]);
+                    a0 = Avx512F.FusedMultiplyAdd(x0, Avx512F.ConvertToVector512Single(Avx512F.ConvertToVector512Int32(Vector128.Load(w))), a0);
+                    a1 = Avx512F.FusedMultiplyAdd(x0, Avx512F.ConvertToVector512Single(Avx512F.ConvertToVector512Int32(Vector128.Load(w + 16))), a1);
+                    a2 = Avx512F.FusedMultiplyAdd(x1, Avx512F.ConvertToVector512Single(Avx512F.ConvertToVector512Int32(Vector128.Load(w + 32))), a2);
+                    a3 = Avx512F.FusedMultiplyAdd(x1, Avx512F.ConvertToVector512Single(Avx512F.ConvertToVector512Int32(Vector128.Load(w + 48))), a3);
+                    w += 64;
+                }
+                a0 += a2;
+                a1 += a3;
+            }
+            for (; k < K; k++)
+            {
+                var w0 = Avx512F.ConvertToVector512Single(Avx512F.ConvertToVector512Int32(Vector128.Load(w)));
+                var w1 = Avx512F.ConvertToVector512Single(Avx512F.ConvertToVector512Int32(Vector128.Load(w + 16)));
+                var x0 = Vector512.Create(x[k]); var y0 = Vector512.Create(y[k]);
+                a0 = Avx512F.FusedMultiplyAdd(x0, w0, a0);
+                a1 = Avx512F.FusedMultiplyAdd(x0, w1, a1);
+                b0 = Avx512F.FusedMultiplyAdd(y0, w0, b0);
+                b1 = Avx512F.FusedMultiplyAdd(y0, w1, b1);
+                w += 32;
+            }
+            var s0 = Vector512.Load(sc); var s1 = Vector512.Load(sc + 16);
+            Vector512.Store(a0 * s0, outTile); Vector512.Store(a1 * s1, outTile + 16);
+            Vector512.Store(b0 * s0, outTile + NR); Vector512.Store(b1 * s1, outTile + NR + 16);
+            return;
+        }
+        for (int i = 0; i < m; i++)
+        {
+            float* xi = x + i * ldx;
+            float* ot = outTile + i * NR;
+            for (int j = 0; j < NR; j++) ot[j] = 0f;
+            for (int kk = 0; kk < K; kk++)
+                for (int j = 0; j < NR; j++) ot[j] = MathF.FusedMultiplyAdd(xi[kk], w[(long)kk * NR + j], ot[j]);
+            for (int j = 0; j < NR; j++) ot[j] *= sc[j];
+        }
+    }
+
     /// <summary>out[i, 0..32) = Σ_k x_i[k] · panel[k, 0..32) for i &lt; m ≤ 2.</summary>
     private static void PanelDot(float* x, long ldx, int m, PackedMatrix b, int nb, float* outTile)
     {
+        if (b.IsInt8)
+        {
+            PanelDotInt8(x, ldx, m, b, nb, outTile);
+            return;
+        }
         int K = b.K;
         long off = (long)nb * K * NR;
         if (UseAvx512)

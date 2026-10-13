@@ -189,6 +189,23 @@ public sealed unsafe class SpeechDecoder : IDisposable
 
         x = Replace(x, _decoderIn.ForwardCausal(x, PadMode.Zero, par));
         Trace?.Invoke("dec_decoder0", x);
+        float[] wav = Trace != null || !Streaming ? VocoderFull(x, par) : VocoderStreaming(x, par);
+        x.Dispose();
+        System.Numerics.Tensors.TensorPrimitives.Min(wav, 1f, wav);
+        System.Numerics.Tensors.TensorPrimitives.Max(wav, -1f, wav);
+        return wav;
+    }
+
+    /// <summary>Run the audio-rate vocoder in causal segments (bit-identical to whole-sequence processing, but the
+    /// working set stays cache-sized instead of streaming gigabytes of activations through memory).</summary>
+    public bool Streaming { get; set; } = true;
+
+    /// <summary>Rows (at the 50 Hz vocoder input rate) per streaming segment: 32 rows = 0.64 s of audio.</summary>
+    public int StreamingSegment { get; set; } = 32;
+
+    private float[] VocoderFull(Activation x, Parallelism par)
+    {
+        x = Clone(x);
         for (int i = 0; i < _blocks.Length; i++)
         {
             var b = _blocks[i];
@@ -210,10 +227,60 @@ public sealed unsafe class SpeechDecoder : IDisposable
         }
         using var y = _decoderOut.ForwardCausal(x, PadMode.Zero, par, pre: _finalAct);
         x.Dispose();
-        var wav = y.ToArray();
-        System.Numerics.Tensors.TensorPrimitives.Min(wav, 1f, wav);
-        System.Numerics.Tensors.TensorPrimitives.Max(wav, -1f, wav);
+        return y.ToArray();
+    }
+
+    private float[] VocoderStreaming(Activation x, Parallelism par)
+    {
+        int upsample = 1;
+        foreach (var b in _blocks) upsample *= b.Up.Stride;
+        var wav = new float[(long)x.Time * upsample];
+        // Per-layer causal history, zero-initialised (= the causal zero padding).
+        var upState = _blocks.Select(b => new Activation(Math.Max(1, b.Up.History), b.Up.Cin, zero: true)).ToArray();
+        var unitState = _blocks.Select(b => b.Units.Select(u => new Activation(Math.Max(1, u.Conv1.History), u.Conv1.Cin, zero: true)).ToArray()).ToArray();
+        var outState = new Activation(Math.Max(1, _decoderOut.History), _decoderOut.Cin, zero: true);
+        try
+        {
+            int seg = Math.Max(1, StreamingSegment);
+            using var piece = new Activation(seg, x.Channels);
+            for (int t0 = 0; t0 < x.Time; t0 += seg)
+            {
+                int n = Math.Min(seg, x.Time - t0);
+                var h = n == seg ? piece : new Activation(n, x.Channels);
+                Buffer.MemoryCopy(x.Row(t0), h.Ptr, (long)n * x.Channels * 4, (long)n * x.Channels * 4);
+                for (int i = 0; i < _blocks.Length; i++)
+                {
+                    var b = _blocks[i];
+                    var up = b.Up.ForwardStreaming(h, upState[i], par, pre: b.Act);
+                    if (h != piece) h.Dispose();
+                    h = up;
+                    for (int u = 0; u < b.Units.Length; u++)
+                    {
+                        var unit = b.Units[u];
+                        using var c1 = unit.Conv1.ForwardStreaming(h, unitState[i][u], par, pre: unit.Act1);
+                        unit.Act2.ApplyInPlace(c1, par);
+                        unit.Conv2.ForwardCausal(c1, PadMode.Zero, par, accumulateInto: h);
+                    }
+                }
+                using (var y = _decoderOut.ForwardStreaming(h, outState, par, pre: _finalAct))
+                    y.AsSpan().CopyTo(wav.AsSpan((int)((long)t0 * upsample), y.Time));
+                if (h != piece) h.Dispose();
+            }
+        }
+        finally
+        {
+            foreach (var s in upState) s.Dispose();
+            foreach (var a in unitState) foreach (var s in a) s.Dispose();
+            outState.Dispose();
+        }
         return wav;
+    }
+
+    private static Activation Clone(Activation x)
+    {
+        var c = new Activation(x.Time, x.Channels);
+        Buffer.MemoryCopy(x.Ptr, c.Ptr, x.Length * 4, x.Length * 4);
+        return c;
     }
 
     private static Activation Replace(Activation old, Activation next)

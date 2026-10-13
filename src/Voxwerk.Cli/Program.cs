@@ -32,6 +32,7 @@ internal static class Cli
           --model <dir|repo>       Local model directory or Hugging Face repo id
                                    (default: Qwen/Qwen3-TTS-12Hz-0.6B-Base, cached in ~/.cache/voxwerk)
           --threads <n>            Worker threads (default: all cores; 1 = single core)
+          --int8                   Store talker weights as int8 (≈1.7× faster generation, approximate)
 
         Sampling (defaults from generation_config.json):
           --greedy                 Deterministic argmax decoding
@@ -84,7 +85,7 @@ internal static class Cli
 
     private static Dictionary<string, string?> Parse(string[] args)
     {
-        var flags = new HashSet<string> { "x-vector-only", "float32", "greedy", "non-streaming" };
+        var flags = new HashSet<string> { "x-vector-only", "float32", "greedy", "non-streaming", "int8" };
         var d = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < args.Length; i++)
         {
@@ -105,8 +106,9 @@ internal static class Cli
     private static async Task<Qwen3Tts> LoadAsync(Dictionary<string, string?> o)
     {
         var sw = Stopwatch.StartNew();
-        var tts = await Qwen3Tts.LoadAsync(Get(o, "model") ?? ModelDownloader.DefaultRepo, I(o, "threads", 0), new Progress<string>(Console.Error.WriteLine));
-        Console.Error.WriteLine($"Model loaded in {sw.Elapsed.TotalSeconds:F1}s ({tts.Parallelism.MaxThreads} thread(s)).");
+        var tts = await Qwen3Tts.LoadAsync(Get(o, "model") ?? ModelDownloader.DefaultRepo, I(o, "threads", 0),
+            Flag(o, "int8") ? WeightPrecision.Int8 : WeightPrecision.BFloat16, new Progress<string>(Console.Error.WriteLine));
+        Console.Error.WriteLine($"Model loaded in {sw.Elapsed.TotalSeconds:F1}s ({tts.Parallelism.MaxThreads} thread(s), {tts.Precision} talker weights).");
         return tts;
     }
 
@@ -148,7 +150,8 @@ internal static class Cli
         Console.Error.WriteLine($"Wrote {outPath}: {result.AudioSeconds:F2}s audio, {result.Codes.Length} frames");
         Console.Error.WriteLine($"  prompt {result.PromptTime.TotalSeconds:F2}s | talker {result.TalkerTime.TotalSeconds:F2}s " +
                                 $"({result.TalkerTime.TotalMilliseconds / Math.Max(1, result.Codes.Length):F0} ms/frame) | decoder {result.DecoderTime.TotalSeconds:F2}s");
-        Console.Error.WriteLine($"  total {result.TotalTime.TotalSeconds:F2}s, RTF {result.RealTimeFactor:F3}");
+        double endToEnd = tVoice.TotalSeconds + result.TotalTime.TotalSeconds;
+        Console.Error.WriteLine($"  total {endToEnd:F2}s incl. voice prompt, RTF {endToEnd / result.AudioSeconds:F3}");
         return 0;
     }
 }

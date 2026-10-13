@@ -3,6 +3,17 @@ using Voxwerk.Numerics;
 
 namespace Voxwerk.Talker;
 
+/// <summary>Storage precision of the talker / code predictor linear weights.</summary>
+public enum WeightPrecision
+{
+    /// <summary>The checkpoint's native bfloat16 (exact; default).</summary>
+    BFloat16,
+
+    /// <summary>int8 with a per-output-channel scale: ~2× less memory traffic per decode step, slightly
+    /// different numerics (opt-in speed mode).</summary>
+    Int8,
+}
+
 /// <summary>Receives a layer's output hidden states (for tests and diagnostics).</summary>
 public unsafe delegate void LayerObserverFn(int layer, float* hidden, int tokens);
 
@@ -64,7 +75,8 @@ public sealed unsafe class DecoderStack : IDisposable
     private readonly Rope _rope;
     private NativeBuffer<float>? _work;
 
-    public DecoderStack(SafeTensorsFile st, string prefix, int layers, int hidden, int intermediate, int heads, int kvHeads, int headDim, float eps, double ropeTheta)
+    public DecoderStack(SafeTensorsFile st, string prefix, int layers, int hidden, int intermediate, int heads, int kvHeads, int headDim, float eps, double ropeTheta,
+                        WeightPrecision precision = WeightPrecision.BFloat16)
     {
         Hidden = hidden;
         Intermediate = intermediate;
@@ -86,10 +98,10 @@ public sealed unsafe class DecoderStack : IDisposable
             using var d = st.ReadBf16(p + "mlp.down_proj.weight");
             _layers[i] = new Layer
             {
-                Qkv = PackedMatrix.FromBf16Linear(hidden, q, k, v),
-                O = PackedMatrix.FromBf16Linear(heads * headDim, o),
-                GateUp = PackedMatrix.FromBf16Linear(hidden, g, u),
-                Down = PackedMatrix.FromBf16Linear(intermediate, d),
+                Qkv = Pack(precision, hidden, q, k, v),
+                O = Pack(precision, heads * headDim, o),
+                GateUp = Pack(precision, hidden, g, u),
+                Down = Pack(precision, intermediate, d),
                 InNorm = st.ReadFloat(p + "input_layernorm.weight"),
                 PostNorm = st.ReadFloat(p + "post_attention_layernorm.weight"),
                 QNorm = st.ReadFloat(p + "self_attn.q_norm.weight"),
@@ -98,6 +110,9 @@ public sealed unsafe class DecoderStack : IDisposable
         }
         _norm = st.ReadFloat(prefix + ".norm.weight");
     }
+
+    internal static PackedMatrix Pack(WeightPrecision precision, int k, params NativeBuffer<ushort>[] parts)
+        => precision == WeightPrecision.Int8 ? PackedMatrix.FromBf16LinearInt8(k, parts) : PackedMatrix.FromBf16Linear(k, parts);
 
     public int Hidden { get; }
     public int Intermediate { get; }

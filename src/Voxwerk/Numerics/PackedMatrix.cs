@@ -14,23 +14,30 @@ public sealed unsafe class PackedMatrix : IDisposable
 
     private readonly NativeBuffer<float>? _f32;
     private readonly NativeBuffer<ushort>? _bf16;
+    private readonly NativeBuffer<sbyte>? _i8;
+    private readonly NativeBuffer<float>? _scale;   // per output column (int8 only)
 
-    private PackedMatrix(int k, int n, NativeBuffer<float>? f32, NativeBuffer<ushort>? bf16)
+    private PackedMatrix(int k, int n, NativeBuffer<float>? f32, NativeBuffer<ushort>? bf16, NativeBuffer<sbyte>? i8 = null, NativeBuffer<float>? scale = null)
     {
         K = k;
         N = n;
         _f32 = f32;
         _bf16 = bf16;
+        _i8 = i8;
+        _scale = scale;
     }
 
     public int K { get; }
     public int N { get; }
     public int Blocks => (N + NR - 1) / NR;
     public bool IsBf16 => _bf16 != null;
+    public bool IsInt8 => _i8 != null;
     internal float* F32 => _f32!.Ptr;
     internal ushort* B16 => _bf16!.Ptr;
+    internal sbyte* I8 => _i8!.Ptr;
+    internal float* Scale => _scale!.Ptr;
 
-    public long ByteSize => _f32 != null ? _f32.Length * 4 : _bf16!.Length * 2;
+    public long ByteSize => _f32 != null ? _f32.Length * 4 : _bf16 != null ? _bf16.Length * 2 : _i8!.Length + _scale!.Length * 4;
 
     /// <summary>Packs a PyTorch linear weight <c>W[n, k]</c> (row-major, float32).</summary>
     public static PackedMatrix FromLinear(float* w, int n, int k)
@@ -114,9 +121,43 @@ public sealed unsafe class PackedMatrix : IDisposable
         return new PackedMatrix(k, n, null, buf);
     }
 
+    /// <summary>
+    /// Packs bf16 linear weights as int8 with one symmetric scale per output channel
+    /// (<c>W[o, i] ≈ scale[o] · q[o, i]</c>, q ∈ [−127, 127]): half the bytes of bf16 for the
+    /// bandwidth-bound decode steps, at a small accuracy cost (opt-in).
+    /// </summary>
+    public static PackedMatrix FromBf16LinearInt8(int k, params NativeBuffer<ushort>[] parts)
+    {
+        using var bf = FromBf16Linear(k, parts);
+        int n = bf.N, blocks = bf.Blocks;
+        var q = new NativeBuffer<sbyte>((long)blocks * k * NR);
+        var scale = new NativeBuffer<float>((long)blocks * NR);
+        ushort* src = bf.B16;
+        sbyte* dst = q.Ptr;
+        float* sc = scale.Ptr;
+        Parallel.For(0, blocks, nb =>
+        {
+            ushort* s = src + (long)nb * k * NR;
+            sbyte* d = dst + (long)nb * k * NR;
+            for (int j = 0; j < NR; j++)
+            {
+                float amax = 0;
+                for (int kk = 0; kk < k; kk++) amax = MathF.Max(amax, MathF.Abs(Bf16.ToFloat(s[(long)kk * NR + j])));
+                float scl = amax > 0 ? amax / 127f : 1f;
+                float inv = 1f / scl;
+                sc[nb * NR + j] = scl;
+                for (int kk = 0; kk < k; kk++)
+                    d[(long)kk * NR + j] = (sbyte)Math.Clamp((int)MathF.Round(Bf16.ToFloat(s[(long)kk * NR + j]) * inv), -127, 127);
+            }
+        });
+        return new PackedMatrix(k, n, null, null, q, scale);
+    }
+
     public void Dispose()
     {
         _f32?.Dispose();
         _bf16?.Dispose();
+        _i8?.Dispose();
+        _scale?.Dispose();
     }
 }

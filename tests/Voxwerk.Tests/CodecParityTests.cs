@@ -66,6 +66,32 @@ public unsafe class CodecParityTests(ITestOutputHelper output, CodecFixture fx) 
     }
 
     [Fact]
+    public void StreamingVocoderIsBitIdentical()
+    {
+        if (!Fixtures.Available(output)) return;
+        var flat = Fixtures.Ref("dec_codes").Ints;
+        var codes = Enumerable.Range(0, 40).Select(f => flat.AsSpan(f * 16, 16).ToArray()).ToList();
+        var par = new Parallelism(0);
+        var dec = fx.Decoder!;
+        try
+        {
+            dec.Streaming = false;
+            var full = dec.Decode(codes, par);
+            dec.Streaming = true;
+            dec.StreamingSegment = 7;
+            var streamed = dec.Decode(codes, par);
+            Assert.Equal(full.Length, streamed.Length);
+            for (int i = 0; i < full.Length; i++)
+                Assert.True(BitConverter.SingleToInt32Bits(full[i]) == BitConverter.SingleToInt32Bits(streamed[i]), $"sample {i}: {full[i]} vs {streamed[i]}");
+        }
+        finally
+        {
+            dec.Streaming = true;
+            dec.StreamingSegment = 32;
+        }
+    }
+
+    [Fact]
     public void EncoderMatches()
     {
         if (!Fixtures.Available(output)) return;

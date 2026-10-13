@@ -167,6 +167,28 @@ public sealed unsafe class Conv1d : IDisposable
         return y;
     }
 
+    /// <summary>Left context (input rows) a causal stride-1 application of this conv needs.</summary>
+    public int History => EffectiveKernel - Stride;
+
+    /// <summary>
+    /// Streaming causal convolution (stride 1): convolves the next <paramref name="segment"/> given the previous
+    /// <see cref="History"/> rows of (activated) input in <paramref name="state"/>, which is updated. Starting from a
+    /// zeroed state, segment-by-segment results are bit-identical to <see cref="ForwardCausal"/> on the whole sequence.
+    /// </summary>
+    public Activation ForwardStreaming(Activation segment, Activation state, Parallelism par, Snake? pre = null, Activation? accumulateInto = null)
+    {
+        if (Stride != 1) throw new NotSupportedException("Streaming requires stride 1.");
+        int hist = History, T = segment.Time;
+        if (hist == 0) return Forward(segment, 0, 0, PadMode.Zero, par, pre, accumulateInto);
+        using var xp = new Activation(hist + T, Cin);
+        Buffer.MemoryCopy(state.Ptr, xp.Ptr, (long)hist * Cin * 4, (long)hist * Cin * 4);
+        if (pre != null) pre.Apply(segment.Ptr, xp.Row(hist), T, par);
+        else Buffer.MemoryCopy(segment.Ptr, xp.Row(hist), segment.Length * 4, segment.Length * 4);
+        var y = Forward(xp, 0, 0, PadMode.Zero, par, null, accumulateInto);
+        Buffer.MemoryCopy(xp.Row(T), state.Ptr, (long)hist * Cin * 4, (long)hist * Cin * 4);
+        return y;
+    }
+
     /// <summary>Causal convolution as in Mimi / Qwen3-TTS codecs: left pad <c>k_eff − stride</c>, plus the right
     /// padding needed for the last window to be complete.</summary>
     public Activation ForwardCausal(Activation x, PadMode mode, Parallelism par, Snake? pre = null, Activation? accumulateInto = null)
@@ -246,6 +268,24 @@ public sealed unsafe class ConvTranspose1d : IDisposable
         {
             if (owned) xp.Dispose();
         }
+        return y;
+    }
+
+    /// <summary>Input rows of history a streaming application needs (kernel / stride − 1).</summary>
+    public int History => _m - 1;
+
+    /// <summary>Streaming counterpart of <see cref="Forward"/>; <paramref name="state"/> holds the previous
+    /// <see cref="History"/> activated input rows (zero at the start) and is updated.</summary>
+    public Activation ForwardStreaming(Activation segment, Activation state, Parallelism par, Snake? pre = null)
+    {
+        int hist = History, T = segment.Time;
+        using var xp = new Activation(hist + T, Cin);
+        if (hist > 0) Buffer.MemoryCopy(state.Ptr, xp.Ptr, (long)hist * Cin * 4, (long)hist * Cin * 4);
+        if (pre != null) pre.Apply(segment.Ptr, xp.Row(hist), T, par);
+        else Buffer.MemoryCopy(segment.Ptr, xp.Row(hist), segment.Length * 4, segment.Length * 4);
+        var y = new Activation(T * Stride, Cout);
+        fixed (float* bias = _bias) Gemm.Conv(xp.Ptr, Cin, Cin, _m, Cin, T, _w, y.Ptr, (long)Stride * Cout, par, bias);
+        if (hist > 0) Buffer.MemoryCopy(xp.Row(T), state.Ptr, (long)hist * Cin * 4, (long)hist * Cin * 4);
         return y;
     }
 

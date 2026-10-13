@@ -38,7 +38,7 @@ public sealed class Qwen3Tts : IDisposable
     private readonly SpeechDecoder _decoder;
     private readonly MelSpectrogram _mel = new();
 
-    private Qwen3Tts(string dir, Parallelism par)
+    private Qwen3Tts(string dir, Parallelism par, WeightPrecision precision)
     {
         Parallelism = par;
         Config = Qwen3TtsConfig.Load(Path.Combine(dir, "config.json"));
@@ -47,7 +47,7 @@ public sealed class Qwen3Tts : IDisposable
         Tokenizer = Qwen2Tokenizer.FromDirectory(dir);
         using (var st = new SafeTensorsFile(Path.Combine(dir, "model.safetensors")))
         {
-            _talker = new TalkerModel(st, Config);
+            _talker = new TalkerModel(st, Config, precision);
             _speaker = new SpeakerEncoder(st);
         }
         using (var st = new SafeTensorsFile(Path.Combine(dir, "speech_tokenizer", "model.safetensors")))
@@ -60,18 +60,22 @@ public sealed class Qwen3Tts : IDisposable
 
     /// <summary>Loads a model directory (as downloaded from <c>Qwen/Qwen3-TTS-12Hz-0.6B-Base</c>).</summary>
     /// <param name="threads">Worker threads for the numeric kernels; 1 = single core, ≤ 0 = all cores.</param>
-    public static Qwen3Tts Load(string modelDir, int threads = 0) => new(modelDir, new Parallelism(threads));
+    /// <param name="precision">Talker weight storage: bf16 (exact, default) or int8 (faster decode steps).</param>
+    public static Qwen3Tts Load(string modelDir, int threads = 0, WeightPrecision precision = WeightPrecision.BFloat16)
+        => new(modelDir, new Parallelism(threads), precision);
 
     /// <summary>Downloads the checkpoint if needed (Hugging Face repo id or local path) and loads it.</summary>
-    public static async Task<Qwen3Tts> LoadAsync(string modelOrRepo = ModelDownloader.DefaultRepo, int threads = 0, IProgress<string>? progress = null, CancellationToken ct = default)
+    public static async Task<Qwen3Tts> LoadAsync(string modelOrRepo = ModelDownloader.DefaultRepo, int threads = 0,
+                                                 WeightPrecision precision = WeightPrecision.BFloat16, IProgress<string>? progress = null, CancellationToken ct = default)
     {
         string dir = await ModelDownloader.EnsureAsync(modelOrRepo, progress: progress, ct: ct).ConfigureAwait(false);
-        return Load(dir, threads);
+        return Load(dir, threads, precision);
     }
 
     public Qwen3TtsConfig Config { get; }
     public Qwen2Tokenizer Tokenizer { get; }
     public Parallelism Parallelism { get; }
+    public WeightPrecision Precision => _talker.Precision;
     public IReadOnlyCollection<string> Languages => ["auto", .. Config.LanguageIds.Keys];
 
     /// <summary>Builds a voice prompt from 24 kHz mono reference audio. Pass the transcript for ICL mode

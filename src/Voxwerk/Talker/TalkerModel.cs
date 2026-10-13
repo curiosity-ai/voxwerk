@@ -18,26 +18,27 @@ public sealed unsafe class TalkerModel : IDisposable
     private readonly NativeBuffer<ushort>[] _cpEmbedding;   // 15 × [cpVocab, hidden] bf16
     private readonly PackedMatrix[] _cpHead;                // 15 × (cpHidden → cpVocab)
 
-    public TalkerModel(SafeTensorsFile st, Qwen3TtsConfig cfg)
+    public TalkerModel(SafeTensorsFile st, Qwen3TtsConfig cfg, WeightPrecision precision = WeightPrecision.BFloat16)
     {
         Config = cfg;
+        Precision = precision;
         if (cfg.CpHiddenSize != cfg.HiddenSize)
             throw new NotSupportedException("small_to_mtp_projection (code predictor width != talker width) is not implemented.");
         _textEmbedding = st.ReadBf16("talker.model.text_embedding.weight");
         using (var w1 = st.ReadBf16("talker.text_projection.linear_fc1.weight"))
         using (var w2 = st.ReadBf16("talker.text_projection.linear_fc2.weight"))
         {
-            _textFc1 = PackedMatrix.FromBf16Linear(cfg.TextHiddenSize, w1);
-            _textFc2 = PackedMatrix.FromBf16Linear(cfg.TextHiddenSize, w2);
+            _textFc1 = DecoderStack.Pack(precision, cfg.TextHiddenSize, w1);
+            _textFc2 = DecoderStack.Pack(precision, cfg.TextHiddenSize, w2);
         }
         _textFc1Bias = st.ReadFloat("talker.text_projection.linear_fc1.bias");
         _textFc2Bias = st.ReadFloat("talker.text_projection.linear_fc2.bias");
         _codecEmbedding = st.ReadBf16("talker.model.codec_embedding.weight");
-        using (var h = st.ReadBf16("talker.codec_head.weight")) _codecHead = PackedMatrix.FromBf16Linear(cfg.HiddenSize, h);
+        using (var h = st.ReadBf16("talker.codec_head.weight")) _codecHead = DecoderStack.Pack(precision, cfg.HiddenSize, h);
         Model = new DecoderStack(st, "talker.model", cfg.NumLayers, cfg.HiddenSize, cfg.IntermediateSize, cfg.NumHeads,
-            cfg.NumKvHeads, cfg.HeadDim, cfg.RmsNormEps, cfg.RopeTheta);
+            cfg.NumKvHeads, cfg.HeadDim, cfg.RmsNormEps, cfg.RopeTheta, precision);
         CodePredictor = new DecoderStack(st, "talker.code_predictor.model", cfg.CpNumLayers, cfg.CpHiddenSize, cfg.CpIntermediateSize,
-            cfg.CpNumHeads, cfg.CpNumKvHeads, cfg.CpHeadDim, cfg.RmsNormEps, cfg.CpRopeTheta);
+            cfg.CpNumHeads, cfg.CpNumKvHeads, cfg.CpHeadDim, cfg.RmsNormEps, cfg.CpRopeTheta, precision);
         int groups = cfg.NumCodeGroups - 1;
         _cpEmbedding = new NativeBuffer<ushort>[groups];
         _cpHead = new PackedMatrix[groups];
@@ -45,11 +46,12 @@ public sealed unsafe class TalkerModel : IDisposable
         {
             _cpEmbedding[i] = st.ReadBf16($"talker.code_predictor.model.codec_embedding.{i}.weight");
             using var h = st.ReadBf16($"talker.code_predictor.lm_head.{i}.weight");
-            _cpHead[i] = PackedMatrix.FromBf16Linear(cfg.CpHiddenSize, h);
+            _cpHead[i] = DecoderStack.Pack(precision, cfg.CpHiddenSize, h);
         }
     }
 
     public Qwen3TtsConfig Config { get; }
+    public WeightPrecision Precision { get; }
     public DecoderStack Model { get; }
     public DecoderStack CodePredictor { get; }
     public int Hidden => Config.HiddenSize;

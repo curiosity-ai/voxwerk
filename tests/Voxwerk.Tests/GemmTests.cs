@@ -123,3 +123,38 @@ public unsafe class ConvTests
         fixed (float* wp = w) return PackedMatrix.FromConv(wp, cout, cin, taps);
     }
 }
+
+public unsafe class Int8GemmTests
+{
+    [Theory]
+    [InlineData(1, 96, 256)]
+    [InlineData(2, 70, 300)]
+    [InlineData(17, 64, 129)]
+    public void Int8CloseToFloat(int m, int n, int k)
+    {
+        var rng = new Random(m * 31 + n);
+        var a = new float[m * k];
+        var w = new float[n * k];
+        for (int i = 0; i < a.Length; i++) a[i] = (float)rng.NextDouble() * 2 - 1;
+        using var wb = new NativeBuffer<ushort>(w.Length);
+        for (int i = 0; i < w.Length; i++)
+        {
+            wb.Ptr[i] = Bf16.FromFloat((float)rng.NextDouble() * 2 - 1);
+            w[i] = Bf16.ToFloat(wb.Ptr[i]);
+        }
+        using var pm = PackedMatrix.FromBf16LinearInt8(k, wb);
+        Assert.True(pm.IsInt8);
+        var c = new float[m * n];
+        fixed (float* ap = a, cp = c) Gemm.Multiply(ap, k, m, pm, cp, n, Parallelism.Single);
+        double num = 0, den = 0;
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++)
+            {
+                double s = 0;
+                for (int p = 0; p < k; p++) s += (double)a[i * k + p] * w[j * k + p];
+                num += (s - c[i * n + j]) * (s - c[i * n + j]);
+                den += s * s;
+            }
+        Assert.True(Math.Sqrt(num / den) < 1e-2, $"relative error {Math.Sqrt(num / den)}");
+    }
+}
